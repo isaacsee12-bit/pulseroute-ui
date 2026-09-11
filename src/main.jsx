@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Bus,
   CalendarDays,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock3,
@@ -19,7 +18,6 @@ import {
   TrainFront,
   TrendingUp,
   Users,
-  Walking,
   X,
 } from 'lucide-react';
 import './styles.css';
@@ -109,7 +107,7 @@ function TripField({ label, value, onClear, icon = MapPin }) {
 }
 
 function RouteCard({ route, active, onSelect }) {
-  const ModeIcon = route.type === 'walk' ? Walking : Bus;
+  const ModeIcon = route.type === 'walk' ? MapPin : Bus;
   if (route.featured) {
     return (
       <button onClick={onSelect} className={`featured-route ${active ? 'selected' : ''}`}>
