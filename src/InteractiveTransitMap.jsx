@@ -166,7 +166,7 @@ const INTERCHANGE_CODES = {
   'Little India': 'DT12 · NE7',
   Bugis: 'EW12 · DT14',
   Promenade: 'CC4 · DT15',
-  Bayfront: 'CE1 · DT16',
+  Bayfront: 'CC34 · DT16',
   Chinatown: 'DT19 · NE4',
   Stevens: 'DT10 · TE11',
   'Tanah Merah': 'EW4',
@@ -240,6 +240,7 @@ export default function InteractiveTransitMap({ activeRoute = 'bus33' }) {
 
   const stationNames = useMemo(() => new Set(stations.map(station => station.name)), [stations]);
   const transferStation = route.steps[1].station;
+  const buonaVista = stations.find(station => station.name === 'Buona Vista');
 
   const setSafeZoom = nextZoom => {
     const next = clamp(nextZoom, 1, 2.6);
@@ -324,9 +325,6 @@ export default function InteractiveTransitMap({ activeRoute = 'bus33' }) {
               <stop offset="0%" stopColor="#eaf6fb" />
               <stop offset="100%" stopColor="#dcecf6" />
             </linearGradient>
-            <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#274b70" floodOpacity=".16" />
-            </filter>
           </defs>
 
           <rect width="1000" height="460" rx="16" fill="url(#focusedWater)" />
@@ -360,10 +358,10 @@ export default function InteractiveTransitMap({ activeRoute = 'bus33' }) {
               ));
             })}
 
-            {stationNames.has('Buona Vista') && (
+            {buonaVista && (
               <g className="disrupted-map-segment">
-                <line x1="58" y1="290" x2="165" y2="290" />
-                <g transform="translate(68 246)">
+                <line x1={Math.max(52, buonaVista.x - 112)} y1={buonaVista.y} x2={buonaVista.x} y2={buonaVista.y} />
+                <g transform={`translate(${Math.max(58, buonaVista.x - 100)} ${buonaVista.y - 44})`}>
                   <rect width="176" height="34" rx="9" />
                   <circle cx="17" cy="17" r="9" />
                   <text x="17" y="21" textAnchor="middle" className="disrupted-mark">!</text>
