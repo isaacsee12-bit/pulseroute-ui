@@ -9,7 +9,6 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
-  Compass,
   MapPin,
   Menu,
   Navigation,
@@ -22,35 +21,36 @@ import {
 } from 'lucide-react';
 import './styles.css';
 import './polish.css';
+import InteractiveTransitMap from './InteractiveTransitMap.jsx';
 
 const routes = [
   {
     id: 'bus33',
-    title: 'Bus 33 → Downtown Line',
-    detail: 'Tampines Int → Bus 33 to Tampines West Stn → DTL to Buona Vista',
+    title: 'Downtown Line → Circle Line',
+    detail: 'Tampines (DT32) → MacPherson (DT26/CC10) → Buona Vista (CC22)',
     arrival: '9:42 AM',
     chance: 82,
     crowd: 'Less crowded',
-    type: 'bus',
+    type: 'rail',
     featured: true,
   },
   {
     id: 'bus168',
-    title: 'Bus 168 → Circle Line',
-    detail: 'Tampines → Bus 168 → CE → Buona Vista',
+    title: 'East-West Line → Circle Line',
+    detail: 'Tampines (EW2) → Paya Lebar (EW8/CC9) → Buona Vista (CC22)',
     arrival: '9:45 AM',
     chance: 76,
     crowd: 'Good availability',
-    type: 'bus',
+    type: 'rail',
   },
   {
     id: 'bedok',
-    title: 'Walk to Bedok → Downtown Line',
-    detail: 'Walk 8 min → Bedok → DTL to Buona Vista',
+    title: 'DTL via Botanic Gardens → CCL',
+    detail: 'Tampines (DT32) → Botanic Gardens (DT9/CC19) → Buona Vista (CC22)',
     arrival: '9:46 AM',
     chance: 74,
     crowd: 'Moderate',
-    type: 'walk',
+    type: 'rail',
   },
 ];
 
@@ -107,26 +107,15 @@ function TripField({ label, value, onClear, icon = MapPin }) {
   );
 }
 
-function WalkIcon(props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
-      <circle cx="13" cy="4" r="2" />
-      <path d="m10 22 2-6 2 2 2 4" />
-      <path d="m6 12 4-4 4 2 3 4" />
-      <path d="m10 8 1 6-4 4" />
-    </svg>
-  );
-}
-
 function RouteCard({ route, active, onSelect }) {
-  const ModeIcon = route.type === 'walk' ? WalkIcon : Bus;
+  const ModeIcon = route.type === 'bus' ? Bus : TrainFront;
   if (route.featured) {
     return (
       <button onClick={onSelect} className={`featured-route ${active ? 'selected' : ''}`}>
         <div className="route-ribbon"><Sparkles size={17} /> Recommended for you</div>
         <div className="crowd-chip"><Users size={16} /> Less crowded</div>
         <div className="featured-main">
-          <div className="mode-flow"><div className="mode-square"><Bus /></div><ArrowRight /><div className="mode-square"><TrainFront /></div></div>
+          <div className="mode-flow"><div className="mode-square"><TrainFront /></div><ArrowRight /><div className="mode-square"><TrainFront /></div></div>
           <div className="route-copy">
             <h3>{route.title}</h3>
             <p>{route.detail}</p>
@@ -156,48 +145,13 @@ function RouteCard({ route, active, onSelect }) {
   );
 }
 
-function RouteMap({ activeRoute }) {
-  const routeLabel = activeRoute === 'bus168' ? 'Bus 168' : activeRoute === 'bedok' ? 'DTL via Bedok' : 'Bus 33';
-  return (
-    <section className="map-card">
-      <div className="map-title-row">
-        <h3>Route map</h3>
-        <div className="legend-inline"><span><i className="line normal" />Normal service</span><span><i className="line disrupted" />Disrupted section</span><span><i className="line route" />Your recommended route</span></div>
-      </div>
-      <div className="map-canvas">
-        <svg viewBox="0 0 900 220" role="img" aria-label="Stylised Singapore transit route map">
-          <defs>
-            <linearGradient id="water" x1="0" x2="1"><stop offset="0%" stopColor="#eef8ff"/><stop offset="100%" stopColor="#dcefff"/></linearGradient>
-          </defs>
-          <rect width="900" height="220" rx="18" fill="url(#water)"/>
-          <g opacity=".5" stroke="#c8deea" strokeWidth="2" fill="none">
-            <path d="M0 70 C130 20 220 130 360 70 S590 10 900 90"/>
-            <path d="M0 150 C130 80 300 190 450 125 S710 80 900 160"/>
-            <path d="M170 0 C220 70 240 110 280 220"/>
-            <path d="M650 0 C620 85 630 130 590 220"/>
-          </g>
-          <path d="M20 45 C120 90 180 48 270 112 C350 166 410 151 490 108 C580 61 670 49 880 86" fill="none" stroke="#39b67b" strokeWidth="4" opacity=".85"/>
-          <path d="M95 72 C145 88 185 106 240 128 C285 146 305 151 344 152" fill="none" stroke="#ff3147" strokeWidth="7" strokeDasharray="12 9"/>
-          <path d="M350 153 C435 130 470 127 525 148 C585 170 635 118 695 113 C765 107 815 68 855 54" fill="none" stroke="#0875f5" strokeWidth="7" strokeLinecap="round"/>
-          <g fontFamily="Inter, Arial" fontSize="14" fontWeight="700" fill="#0d1f55">
-            <circle cx="95" cy="72" r="6" fill="#fff" stroke="#ff3147" strokeWidth="4"/><text x="105" y="62">Jurong East</text>
-            <circle cx="350" cy="153" r="7" fill="#fff" stroke="#18336e" strokeWidth="3"/><text x="360" y="171">Buona Vista</text>
-            <circle cx="435" cy="130" r="6" fill="#fff" stroke="#18336e" strokeWidth="3"/><text x="445" y="122">Commonwealth</text>
-            <circle cx="522" cy="148" r="6" fill="#fff" stroke="#18336e" strokeWidth="3"/><text x="530" y="169">Queenstown</text>
-            <circle cx="695" cy="113" r="6" fill="#fff" stroke="#18336e" strokeWidth="3"/><text x="706" y="103">Bedok</text>
-            <circle cx="855" cy="54" r="7" fill="#fff" stroke="#18336e" strokeWidth="3"/><text x="866" y="48">Tampines</text>
-          </g>
-          <g transform="translate(174,74)"><rect width="180" height="48" rx="10" fill="#fff5f5" stroke="#ffc9cf"/><AlertTriangle x="13" y="12" width="22" color="#ff2741"/><text x="45" y="20" fontSize="13" fontWeight="800" fill="#a21422">No service</text><text x="45" y="37" fontSize="12" fill="#b7434f">Jurong East – Buona Vista</text></g>
-          <g transform="translate(608,80)"><rect width="75" height="30" rx="7" fill="#0875f5"/><text x="14" y="20" fontSize="13" fontWeight="800" fill="white">{routeLabel}</text></g>
-        </svg>
-        <div className="zoom-control"><button>+</button><button>−</button></div>
-        <button className="map-legend"><Compass size={16} /> Show legend <ChevronDown size={14} /></button>
-      </div>
-    </section>
-  );
-}
-
 function NetworkSidebar() {
+  const alternatives = [
+    ['DTL → CCL', 'Good availability'],
+    ['EWL → CCL', 'Good availability'],
+    ['DTL via Botanic Gardens', 'Moderate'],
+  ];
+
   return (
     <aside className="network-panel">
       <div className="network-heading">
@@ -235,12 +189,12 @@ function NetworkSidebar() {
       <section className="side-card alternatives-card">
         <h3><Navigation /> Best alternatives right now</h3>
         <p className="subtle">Based on current network conditions</p>
-        {['Bus 33', 'Bus 168', 'DTL via Bedok'].map((name, index) => (
+        {alternatives.map(([name, availability], index) => (
           <div className="alt-row" key={name}>
             <span className="rank">{index + 1}</span>
-            {index < 2 ? <Bus /> : <TrainFront />}
+            <TrainFront />
             <strong>{name}</strong>
-            <span className={`availability ${index === 2 ? 'moderate' : ''}`}>{index === 2 ? 'Moderate' : 'Good availability'}</span>
+            <span className={`availability ${availability === 'Moderate' ? 'moderate' : ''}`}>{availability}</span>
             <ChevronRight />
           </div>
         ))}
@@ -288,7 +242,7 @@ function App() {
           <div className="compact-grid">
             {routes.slice(1).map(route => <RouteCard key={route.id} route={route} active={activeRoute === route.id} onSelect={() => setActiveRoute(route.id)} />)}
           </div>
-          <RouteMap activeRoute={active?.id} />
+          <InteractiveTransitMap activeRoute={active?.id} />
         </section>
         <NetworkSidebar />
       </main>
