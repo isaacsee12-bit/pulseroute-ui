@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import './styles.css';
+import './polish.css';
 
 const routes = [
   {
@@ -106,8 +107,19 @@ function TripField({ label, value, onClear, icon = MapPin }) {
   );
 }
 
+function WalkIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <circle cx="13" cy="4" r="2" />
+      <path d="m10 22 2-6 2 2 2 4" />
+      <path d="m6 12 4-4 4 2 3 4" />
+      <path d="m10 8 1 6-4 4" />
+    </svg>
+  );
+}
+
 function RouteCard({ route, active, onSelect }) {
-  const ModeIcon = route.type === 'walk' ? MapPin : Bus;
+  const ModeIcon = route.type === 'walk' ? WalkIcon : Bus;
   if (route.featured) {
     return (
       <button onClick={onSelect} className={`featured-route ${active ? 'selected' : ''}`}>
