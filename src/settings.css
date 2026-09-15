@@ -1,0 +1,405 @@
+.settings-page {
+  padding-bottom: 72px;
+}
+
+.security-banner {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin: 0 0 22px;
+  padding: 17px 18px;
+  border: 1px solid #c9dcff;
+  border-radius: 14px;
+  background: #f4f8ff;
+  color: #17355f;
+}
+
+.security-banner > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: #1769d2;
+}
+
+.security-banner b,
+.security-banner p {
+  display: block;
+}
+
+.security-banner p {
+  margin: 5px 0 0;
+  color: #536b8d;
+  line-height: 1.55;
+}
+
+.security-banner code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: #e5efff;
+  color: #0f4b9a;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.credential-card {
+  padding: 22px;
+}
+
+.credential-heading {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.credential-heading .credential-icon {
+  width: 43px;
+  height: 43px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  background: #edf4ff;
+  color: #0a66d8;
+}
+
+.credential-heading .credential-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.credential-heading span {
+  display: block;
+  margin-bottom: 2px;
+  color: #6e82a0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.credential-heading h2 {
+  margin: 0;
+  color: #102d58;
+  font-size: 20px;
+}
+
+.credential-heading p {
+  margin: 5px 0 0;
+  color: #627591;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.credential-field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.credential-field > span {
+  display: block;
+  margin-bottom: 7px;
+  color: #334e74;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.credential-field > div {
+  display: flex;
+  align-items: stretch;
+  min-height: 44px;
+  overflow: hidden;
+  border: 1px solid #cdd8e8;
+  border-radius: 10px;
+  background: #fff;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.credential-field > div:focus-within {
+  border-color: #438bf0;
+  box-shadow: 0 0 0 3px rgba(42, 121, 230, .11);
+}
+
+.credential-field input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 10px 12px;
+  background: transparent;
+  color: #18365f;
+  font: inherit;
+  font-size: 13px;
+}
+
+.credential-field > div > button {
+  width: 44px;
+  border: 0;
+  border-left: 1px solid #e1e7f0;
+  background: #f7f9fc;
+  color: #587091;
+  cursor: pointer;
+}
+
+.credential-field > div > button:hover {
+  background: #edf3fb;
+}
+
+.credential-field > div > button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.token-expiry {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -1px 0 12px;
+  color: #607795;
+  font-size: 12px;
+}
+
+.token-expiry svg {
+  width: 14px;
+  height: 14px;
+}
+
+.token-expiry.expired {
+  color: #bc2f2f;
+  font-weight: 700;
+}
+
+.credential-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  margin: 10px 0 14px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: #f6f8fb;
+  color: #5b6f8e;
+  font-size: 12px;
+}
+
+.credential-status > span {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #9caabd;
+}
+
+.credential-status b {
+  color: #425b7c;
+}
+
+.credential-status small {
+  flex-basis: 100%;
+  padding-left: 15px;
+  line-height: 1.4;
+}
+
+.credential-status.connected {
+  background: #eefaf3;
+}
+
+.credential-status.connected > span {
+  background: #20a25a;
+}
+
+.credential-status.connected b {
+  color: #18733f;
+}
+
+.credential-status.invalid_token,
+.credential-status.expired_token,
+.credential-status.invalid_key,
+.credential-status.connection_failed {
+  background: #fff3f2;
+}
+
+.credential-status.invalid_token > span,
+.credential-status.expired_token > span,
+.credential-status.invalid_key > span,
+.credential-status.connection_failed > span {
+  background: #da4949;
+}
+
+.credential-status.invalid_token b,
+.credential-status.expired_token b,
+.credential-status.invalid_key b,
+.credential-status.connection_failed b {
+  color: #9e2929;
+}
+
+.credential-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 6px;
+}
+
+.credential-actions button {
+  min-height: 38px;
+}
+
+.credential-actions svg {
+  width: 15px;
+  height: 15px;
+}
+
+.credential-note {
+  margin: 15px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid #e7ecf3;
+  color: #6d7f99;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.danger-outline {
+  border-color: #efc9c6 !important;
+  color: #aa3636 !important;
+}
+
+.danger-outline:hover {
+  background: #fff4f3 !important;
+}
+
+.settings-footer,
+.settings-help {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 18px;
+  padding: 18px 20px;
+}
+
+.settings-footer > div,
+.settings-help > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.settings-footer svg,
+.settings-help svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: #547093;
+}
+
+.settings-footer h3,
+.settings-help h3 {
+  margin: 0;
+  color: #18365f;
+  font-size: 15px;
+}
+
+.settings-footer p,
+.settings-help p {
+  margin: 4px 0 0;
+  color: #657994;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.source-badge.onemap {
+  background: #e9f3ff;
+  color: #075bbd;
+  border-color: #bfdcff;
+}
+
+.source-badge.lta {
+  background: #eaf9f0;
+  color: #147344;
+  border-color: #bfe7cf;
+}
+
+.source-badge.model {
+  background: #f3f5f8;
+  color: #51647f;
+  border-color: #d9e0e9;
+}
+
+.cors-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: min(660px, 100%);
+  margin: 4px auto 14px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #fff5e8;
+  color: #895817;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.cors-warning svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.text-button {
+  margin-top: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #0867d7;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.reroute-route .source-badge {
+  display: inline-flex;
+  margin-top: 8px;
+}
+
+@media (max-width: 960px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .credential-card {
+    padding: 17px;
+  }
+
+  .settings-footer,
+  .settings-help {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-footer > button,
+  .settings-help > button {
+    width: 100%;
+  }
+
+  .credential-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .credential-actions .danger-outline {
+    grid-column: 1 / -1;
+  }
+
+  .security-banner {
+    padding: 14px;
+  }
+}
