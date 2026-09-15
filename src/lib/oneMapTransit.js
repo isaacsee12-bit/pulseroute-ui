@@ -1,6 +1,15 @@
 const ONEMAP_SEARCH_URL = 'https://www.onemap.gov.sg/api/common/elastic/search';
 const ONEMAP_ROUTE_URL = 'https://www.onemap.gov.sg/api/public/routingsvc/route';
 
+const RAIL_LINES = {
+  NS: { code: 'NSL', name: 'North-South Line' },
+  EW: { code: 'EWL', name: 'East-West Line' },
+  NE: { code: 'NEL', name: 'North East Line' },
+  CC: { code: 'CCL', name: 'Circle Line' },
+  DT: { code: 'DTL', name: 'Downtown Line' },
+  TE: { code: 'TEL', name: 'Thomson-East Coast Line' },
+};
+
 export class OneMapRequestError extends Error {
   constructor(message, code = 'connection_failed', status = null) {
     super(message);
@@ -37,7 +46,7 @@ async function fetchJson(url, token) {
       headers: authHeaders(token),
       cache: 'no-store',
     });
-  } catch (error) {
+  } catch {
     throw new OneMapRequestError(
       'The browser could not reach OneMap directly. This can be caused by CORS, a network policy, or a temporary OneMap outage.',
       'connection_failed',
@@ -68,10 +77,7 @@ export async function testOneMapToken(token) {
   if (!Array.isArray(payload?.results)) {
     throw new OneMapRequestError('OneMap returned an unexpected Search response.', 'connection_failed');
   }
-  return {
-    ok: true,
-    resultCount: payload.results.length,
-  };
+  return { ok: true, resultCount: payload.results.length };
 }
 
 function stationSearchScore(result, stationName) {
@@ -131,14 +137,9 @@ export function oneMapDepartureParameters(clockValue) {
   const mm = String(Number.isFinite(minute) ? minute : Number(nowParts.minute)).padStart(2, '0');
   let candidate = new Date(`${nowParts.year}-${nowParts.month}-${nowParts.day}T${hh}:${mm}:00+08:00`);
 
-  if (candidate.getTime() < now.getTime() - 60_000) {
-    candidate = new Date(candidate.getTime() + 24 * 60 * 60 * 1000);
-  }
+  if (candidate.getTime() < now.getTime() - 60_000) candidate = new Date(candidate.getTime() + 24 * 60 * 60 * 1000);
   const parts = singaporeDateParts(candidate);
-  return {
-    date: `${parts.month}-${parts.day}-${parts.year}`,
-    time: `${hh}:${mm}:00`,
-  };
+  return { date: `${parts.month}-${parts.day}-${parts.year}`, time: `${hh}:${mm}:00` };
 }
 
 function seconds(value) {
@@ -172,110 +173,129 @@ function cleanPlaceName(value, fallback = '') {
     .trim() || fallback;
 }
 
-function transitLineCode(leg) {
-  const mode = String(leg?.mode || '').toUpperCase();
-  if (mode === 'BUS') return 'BUS';
-
+function railLineMeta(leg) {
   const raw = `${leg?.routeShortName || ''} ${leg?.route || ''} ${leg?.routeLongName || ''}`.toUpperCase();
-  const direct = raw.match(/\b(NSL|EWL|NEL|CCL|DTL|TEL)\b/);
-  if (direct) return direct[1];
-  const stationCode = raw.match(/\b(NS|EW|NE|CC|DT|TE)\d{1,2}[A-Z]?\b/);
-  if (stationCode) {
-    return { NS: 'NSL', EW: 'EWL', NE: 'NEL', CC: 'CCL', DT: 'DTL', TE: 'TEL' }[stationCode[0].slice(0, 2)] || mode;
+  for (const [prefix, meta] of Object.entries(RAIL_LINES)) {
+    if (new RegExp(`(^|\\s)${prefix}(\\s|$)`).test(raw)) return meta;
   }
-  if (raw.includes('NORTH SOUTH')) return 'NSL';
-  if (raw.includes('EAST WEST')) return 'EWL';
-  if (raw.includes('NORTH EAST')) return 'NEL';
-  if (raw.includes('CIRCLE')) return 'CCL';
-  if (raw.includes('DOWNTOWN')) return 'DTL';
-  if (raw.includes('THOMSON')) return 'TEL';
-  return mode || 'TRANSIT';
+  if (raw.includes('NORTH SOUTH')) return RAIL_LINES.NS;
+  if (raw.includes('EAST WEST')) return RAIL_LINES.EW;
+  if (raw.includes('NORTH EAST')) return RAIL_LINES.NE;
+  if (raw.includes('CIRCLE')) return RAIL_LINES.CC;
+  if (raw.includes('DOWNTOWN')) return RAIL_LINES.DT;
+  if (raw.includes('THOMSON')) return RAIL_LINES.TE;
+  return null;
 }
 
-function legLabel(leg, line) {
-  if (line === 'BUS') {
-    const service = leg?.routeShortName || leg?.route;
-    return service ? `Bus ${service}` : 'Bus';
-  }
-  return leg?.routeShortName || leg?.route || line;
+function normaliseLeg(leg, index, origin, destination) {
+  const mode = String(leg?.mode || 'TRANSIT').toUpperCase();
+  const rail = mode === 'SUBWAY' || mode === 'RAIL' ? railLineMeta(leg) : null;
+  const service = mode === 'BUS' ? String(leg?.routeShortName || leg?.route || '').trim() : '';
+  const line = mode === 'WALK' ? 'WALK' : mode === 'BUS' ? 'BUS' : rail?.code || mode;
+  const label = mode === 'WALK'
+    ? 'Walk'
+    : mode === 'BUS'
+      ? (service ? `Bus ${service}` : 'Bus')
+      : rail?.name || leg?.routeLongName || leg?.routeShortName || leg?.route || line;
+  const from = cleanPlaceName(leg?.from?.name, index === 0 ? origin : '');
+  const to = cleanPlaceName(leg?.to?.name, destination);
+  const intermediateStops = Array.isArray(leg?.intermediateStops)
+    ? leg.intermediateStops.map(stop => ({
+      name: cleanPlaceName(stop?.name),
+      stopCode: stop?.stopCode || '',
+      departure: clockFromEpoch(stop?.departure),
+      arrival: clockFromEpoch(stop?.arrival),
+    })).filter(stop => stop.name)
+    : [];
+  const durationSeconds = seconds(leg?.duration);
+  const distanceMetres = Number.isFinite(Number(leg?.distance)) ? Math.round(Number(leg.distance)) : null;
+
+  return {
+    mode,
+    from,
+    to,
+    durationMinutes: durationSeconds ? Math.max(1, Math.round(durationSeconds / 60)) : null,
+    durationSeconds,
+    distanceMetres,
+    service,
+    line,
+    label,
+    headsign: leg?.headsign || '',
+    stopCount: Array.isArray(leg?.intermediateStops) ? intermediateStops.length + 1 : null,
+    departure: clockFromEpoch(leg?.startTime || leg?.from?.departure),
+    arrival: clockFromEpoch(leg?.endTime || leg?.to?.arrival),
+    fromStopCode: leg?.from?.stopCode || '',
+    toStopCode: leg?.to?.stopCode || '',
+    intermediateStops,
+    geometry: leg?.legGeometry?.points || null,
+    stations: [from, ...intermediateStops.map(stop => stop.name), to]
+      .filter((name, stationIndex, array) => name && (stationIndex === 0 || name !== array[stationIndex - 1])),
+  };
 }
 
 function normaliseOneMapItinerary(itinerary, index, origin, destination) {
-  const legs = Array.isArray(itinerary?.legs) ? itinerary.legs : [];
-  const routeLegs = legs.filter(leg => String(leg?.mode || '').toUpperCase() !== 'WALK');
-  const walkingLegs = legs.filter(leg => String(leg?.mode || '').toUpperCase() === 'WALK');
+  const rawLegs = Array.isArray(itinerary?.legs) ? itinerary.legs : [];
+  const legs = rawLegs.map((leg, legIndex) => normaliseLeg(leg, legIndex, origin, destination));
+  const transitLegs = legs.filter(leg => leg.mode !== 'WALK');
+  const walkLegs = legs.filter(leg => leg.mode === 'WALK');
   const durationMinutes = Math.max(1, Math.round(seconds(itinerary?.duration) / 60));
-
-  const segments = routeLegs.map(leg => {
-    const line = transitLineCode(leg);
-    const from = cleanPlaceName(leg?.from?.name, origin);
-    const to = cleanPlaceName(leg?.to?.name, destination);
-    const intermediate = Array.isArray(leg?.intermediateStops)
-      ? leg.intermediateStops.map(stop => cleanPlaceName(stop?.name)).filter(Boolean)
-      : [];
-    return {
-      line,
-      label: legLabel(leg, line),
-      mode: String(leg?.mode || 'TRANSIT').toUpperCase(),
-      stations: [from, ...intermediate, to].filter((name, stationIndex, array) => name && (stationIndex === 0 || name !== array[stationIndex - 1])),
-      stopCount: intermediate.length + 1,
-      headsign: leg?.headsign || '',
-      departure: clockFromEpoch(leg?.startTime || leg?.from?.departure),
-      arrival: clockFromEpoch(leg?.endTime || leg?.to?.arrival),
-      distanceMetres: Number.isFinite(Number(leg?.distance)) ? Math.round(Number(leg.distance)) : null,
-      durationSeconds: seconds(leg?.duration),
-      geometry: leg?.legGeometry?.points || null,
-    };
-  });
-
-  const lines = [...new Set(segments.map(segment => segment.line).filter(line => line && line !== 'WALK'))];
-  const transferStations = segments.slice(0, -1).map(segment => segment.stations[segment.stations.length - 1]).filter(Boolean);
-  const stationSequence = [origin, ...segments.flatMap(segment => segment.stations.slice(1)), destination]
-    .filter((name, stationIndex, array) => name && (stationIndex === 0 || name !== array[stationIndex - 1]));
-  const walkingMinutes = Math.round(walkingLegs.reduce((sum, leg) => sum + seconds(leg?.duration), 0) / 60);
+  const itineraryWalkSeconds = seconds(itinerary?.walkTime);
+  const walkingMinutes = itineraryWalkSeconds
+    ? Math.round(itineraryWalkSeconds / 60)
+    : Math.round(walkLegs.reduce((sum, leg) => sum + (leg.durationSeconds || 0), 0) / 60);
+  const itineraryWalkDistance = Number(itinerary?.walkDistance);
+  const totalWalkDistanceMetres = Number.isFinite(itineraryWalkDistance)
+    ? Math.round(itineraryWalkDistance)
+    : Math.round(walkLegs.reduce((sum, leg) => sum + (leg.distanceMetres || 0), 0));
+  const actualTransfers = Number(itinerary?.transfers);
+  const transfers = Number.isFinite(actualTransfers) ? actualTransfers : Math.max(0, transitLegs.length - 1);
+  const railLines = [...new Set(transitLegs.map(leg => leg.line).filter(line => Object.values(RAIL_LINES).some(meta => meta.code === line)))];
+  const busServices = [...new Set(transitLegs.filter(leg => leg.mode === 'BUS').map(leg => leg.service).filter(Boolean))];
   const firstLeg = legs[0];
   const lastLeg = legs[legs.length - 1];
-  const title = segments.length
-    ? segments.map(segment => segment.label).join(' → ')
-    : 'OneMap public-transport route';
+  const visibleServices = transitLegs.map(leg => leg.label).filter(Boolean);
+  const title = visibleServices.length ? visibleServices.join(' → ') : walkLegs.length ? 'Walk' : 'OneMap public-transport route';
+  const transferPlaces = transitLegs.slice(0, -1).map(leg => leg.to).filter(Boolean);
+  const railStops = legs
+    .filter(leg => leg.mode === 'SUBWAY' || leg.mode === 'RAIL')
+    .flatMap(leg => [leg.from, ...leg.intermediateStops.map(stop => stop.name), leg.to])
+    .filter(Boolean);
+  const stationSequence = [origin, ...railStops, destination]
+    .filter((name, stationIndex, array) => name && (stationIndex === 0 || name !== array[stationIndex - 1]));
 
   return {
-    id: `onemap-${index}-${durationMinutes}-${lines.join('-')}`,
+    id: `onemap-${index}-${durationMinutes}-${railLines.join('-')}-${busServices.join('-')}`,
     source: 'OneMap',
     sourceKind: 'onemap',
     oneMapRoute: true,
     shortTitle: title,
     title,
-    detail: transferStations.length
-      ? `${origin} → ${transferStations.join(' → ')} → ${destination}`
+    detail: transferPlaces.length
+      ? `${origin} → ${transferPlaces.join(' → ')} → ${destination}`
       : `${origin} → ${destination}`,
     durationMinutes,
     baseMinutes: durationMinutes,
-    arrival: clockFromEpoch(itinerary?.endTime || lastLeg?.endTime || lastLeg?.to?.arrival),
-    departure: clockFromEpoch(itinerary?.startTime || firstLeg?.startTime || firstLeg?.from?.departure),
-    transfers: Math.max(0, segments.length - 1),
+    arrival: clockFromEpoch(itinerary?.endTime || lastLeg?.arrival),
+    departure: clockFromEpoch(itinerary?.startTime || firstLeg?.departure),
+    transfers,
     walkingMinutes,
+    totalWalkDistanceMetres: totalWalkDistanceMetres || 0,
     confidence: 90,
     confidenceSource: 'PulseRoute estimate',
     reliability: 0.9,
     crowdLabel: 'LTA crowd data when available',
-    score: Math.max(45, 105 - durationMinutes - Math.max(0, segments.length - 1) * 2),
-    lines,
-    segments,
+    score: Math.max(45, 105 - durationMinutes - transfers * 2),
+    lines: railLines,
+    busServices,
+    hasBus: busServices.length > 0,
+    hasWalking: walkLegs.length > 0,
+    legs,
+    segments: legs,
     stationSequence,
     origin,
     destination,
-    totalWalkDistanceMetres: Math.round(walkingLegs.reduce((sum, leg) => sum + (Number(leg?.distance) || 0), 0)),
-    geometry: legs.map(leg => leg?.legGeometry?.points).filter(Boolean),
-    instructions: legs.map(leg => ({
-      mode: String(leg?.mode || '').toUpperCase(),
-      from: cleanPlaceName(leg?.from?.name),
-      to: cleanPlaceName(leg?.to?.name),
-      route: leg?.routeShortName || leg?.route || '',
-      headsign: leg?.headsign || '',
-      durationSeconds: seconds(leg?.duration),
-      distanceMetres: Number(leg?.distance) || 0,
-    })),
+    geometry: legs.map(leg => leg.geometry).filter(Boolean),
+    fare: itinerary?.fare ?? null,
   };
 }
 
@@ -294,9 +314,11 @@ export async function fetchOneMapTransitRoutes({ origin, destination, departureT
     mode: 'TRANSIT',
     maxWalkDistance: '1000',
     numItineraries: '3',
+    maxTransfers: '3',
+    showIntermediateStops: 'true',
   });
 
   const payload = await fetchJson(`${ONEMAP_ROUTE_URL}?${params.toString()}`, token);
   const itineraries = Array.isArray(payload?.plan?.itineraries) ? payload.plan.itineraries : [];
-  return itineraries.map((itinerary, index) => normaliseOneMapItinerary(itinerary, index, origin, destination));
+  return itineraries.map((itinerary, itineraryIndex) => normaliseOneMapItinerary(itinerary, itineraryIndex, origin, destination));
 }
