@@ -47,7 +47,7 @@ export const LINE_SEQUENCES = [
       s('NE1', 'HarbourFront'), s('NE3', 'Outram Park'), s('NE4', 'Chinatown'), s('NE5', 'Clarke Quay'),
       s('NE6', 'Dhoby Ghaut'), s('NE7', 'Little India'), s('NE8', 'Farrer Park'), s('NE9', 'Boon Keng'),
       s('NE10', 'Potong Pasir'), s('NE11', 'Woodleigh'), s('NE12', 'Serangoon'), s('NE13', 'Kovan'),
-      s('NE14', 'Hougang'), s('NE15', 'Buangkok'), s('NE16', 'Sengkang'), s('NE17', 'Punggol'),
+      s('NE14', 'Hougang'), s('NE15', 'Buangkok'), s('NE16', 'Sengkang'), s('NE17', 'Punggol'), s('NE18', 'Punggol Coast'),
     ],
   },
   {
