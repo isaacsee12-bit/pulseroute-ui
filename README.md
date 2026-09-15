@@ -1,10 +1,12 @@
 # PulseRoute
 
-PulseRoute is a Nebula X Hackathon 2026 prototype for disruption-aware Singapore public-transport decision support. It keeps a complete local MRT routing graph available at all times, and can augment the experience with government data sources when they are reachable directly from the browser.
+PulseRoute is a Nebula X Hackathon 2026 prototype for disruption-aware, multimodal Singapore public-transport decision support. Its core idea is that a disruption tool should not automatically push every commuter onto the same nominally fastest alternative. PulseRoute compares viable rail, bus and walking itineraries, explains the trade-off, and can diversify near-equivalent recommendations in **Balanced** mode.
+
+PulseRoute does **not** claim to optimise the whole Singapore transport network. The hackathon prototype demonstrates how commuter-level recommendations can be designed to spread demand across viable alternatives while remaining transparent about data sources and fallbacks.
 
 ## Architecture
 
-PulseRoute is intentionally a **frontend-only React + Vite application**.
+PulseRoute is a **frontend-only React + Vite application**.
 
 There is:
 
@@ -14,13 +16,14 @@ There is:
 - no environment-variable setup;
 - no Google Maps API dependency.
 
-Optional credentials are entered through the in-app **Settings** page and stored in browser `sessionStorage` for the current session only.
+Optional credentials are entered through **Settings** and stored in browser `sessionStorage` for the current session only.
 
-The routing/data stack is:
+The data/routing stack is:
 
-1. **SLA OneMap** — authenticated Search and supported public-transport routing, when direct browser requests succeed.
-2. **LTA DataMall** — Train Service Alerts and Station Crowd Density Real Time, when direct browser requests are permitted.
-3. **PulseRoute network model** — the always-available local MRT graph and hackathon-safe fallback.
+1. **SLA OneMap** — authenticated Search and public-transport routing. Successful itineraries can contain ordered `WALK`, `BUS` and `SUBWAY` legs.
+2. **LTA DataMall** — Train Service Alerts, Station Crowd Density Real Time, and optional Bus Arrival v3 for bus legs when direct browser access succeeds.
+3. **PulseRoute network model** — the always-available, MRT-only local routing fallback.
+4. **Simulation** — clearly labelled hackathon scenarios used only to demonstrate proactive rerouting when external APIs are unavailable.
 
 ## Run locally
 
@@ -29,13 +32,9 @@ npm install
 npm run dev
 ```
 
-Open the Vite URL shown in the terminal, normally:
+Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
 
-```text
-http://localhost:5173
-```
-
-Production build:
+Production check:
 
 ```bash
 npm run build
@@ -45,134 +44,176 @@ No Vercel CLI, `.env.local`, cloud function, worker, or backend is required.
 
 ## Configure optional official data
 
-After starting PulseRoute:
-
 1. Open **Settings**.
-2. Paste a **OneMap Access Token** into the OneMap field.
+2. Paste a **OneMap Access Token**.
 3. Click **Save**, then **Test Connection**.
-4. Paste your **LTA DataMall Account Key** into the LTA field.
+4. Paste your **LTA DataMall Account Key**.
 5. Click **Save**, then **Test Connection**.
 6. Return to **Plan a Trip**.
 
-A connection is only labelled **Connected** after a real authenticated API request succeeds. Merely entering text does not mark a service connected.
+A connection is only shown as connected after a real authenticated request succeeds.
 
 ### OneMap
 
-Official links:
+Official resources:
 
-- Register for OneMap API access: https://www.onemap.gov.sg/apidocs/register
-- Official authentication/token documentation: https://www.onemap.gov.sg/apidocs/authentication
-- Token endpoint documented by OneMap: https://www.onemap.gov.sg/api/auth/post/getToken
-- Search documentation: https://www.onemap.gov.sg/apidocs/search
-- Routing documentation: https://www.onemap.gov.sg/apidocs/routing
+- Register: https://www.onemap.gov.sg/apidocs/register
+- Authentication/token documentation: https://www.onemap.gov.sg/apidocs/authentication
+- Search: https://www.onemap.gov.sg/apidocs/search
+- Official workshop/resources: https://www.onemap.gov.sg/apidocs/docs/workshopmay2025
 
-OneMap authentication uses a registered email/password to generate a temporary `access_token`. **Do that outside PulseRoute. Do not enter your OneMap account password into PulseRoute.** Copy only the returned access token into Settings.
+Generate the temporary `access_token` outside PulseRoute using your registered OneMap account. Paste **only the access token** into Settings; never paste your OneMap password into PulseRoute.
 
-OneMap documents tokens as valid for **3 days** and returning an expiry timestamp. Current OneMap tokens are JWTs; PulseRoute can read the JWT expiry locally for a warning, but a token is considered connected only after a real authenticated OneMap Search request succeeds.
+Current OneMap authentication documentation says tokens are valid for **3 days**. PulseRoute reads a JWT expiry locally where available, but **Test Connection** still performs a real authenticated Search request before reporting success.
 
-The OneMap Search request uses the official `Authorization` header. The access token is never placed in a URL.
+### OneMap multimodal routing
 
-### OneMap public-transport routing
-
-PulseRoute resolves the selected MRT stations with OneMap Search, then attempts OneMap's public-transport routing service at:
+PulseRoute resolves the selected MRT stations using OneMap Search, then calls OneMap's public-transport routing endpoint:
 
 ```text
 https://www.onemap.gov.sg/api/public/routingsvc/route
 ```
 
-For public transport the current routing interface uses a **departure date/time**. The current documentation does not expose an "arrive by" parameter, so PulseRoute deliberately uses **Depart at** rather than fabricating arrival-time routing.
+The implementation follows the current official OneMap workshop pattern for public transport (`routeType=pt`, departure `date`/`time`, `mode=TRANSIT`, walking limit and multiple itineraries). The official workshop response demonstrates ordered public-transport legs and fields including itinerary duration, walking time/distance, transfers, fare, leg mode, route names, stop codes, intermediate stops and leg duration.
 
-When OneMap returns itineraries, route cards are labelled **OneMap** and PulseRoute parses only fields that are present in the returned itinerary, such as duration, route legs/modes, transfers, walking duration, times and geometry where supplied.
+PulseRoute only displays fields that actually exist in the returned response. It does not invent bus services, stop codes, times, distances or geometry.
 
-If OneMap is unavailable, rejects the token, returns no public-transport itinerary, or cannot be reached directly by the browser, PulseRoute immediately keeps/uses the **PulseRoute network model** route instead.
+When OneMap succeeds, route cards and route detail can show:
 
-### LTA DataMall
+- total journey duration;
+- walking time and OneMap walking distance;
+- transfer count;
+- bus service numbers;
+- MRT line names/codes;
+- ordered walking, bus and train legs;
+- leg duration/distance where returned;
+- headsign/stop count where returned;
+- departure/arrival information where returned.
 
-Official links:
+If OneMap is unavailable, rejects the token, returns no itinerary, or cannot be reached by the browser, PulseRoute immediately keeps the **MRT-only local network model** route.
 
-- DataMall home: https://datamall.lta.gov.sg/content/datamall/en.html
-- Request an Account Key: https://datamall.lta.gov.sg/content/datamall/en/request-for-api.html
+## Recommendation scoring
+
+The five commuter preferences remain:
+
+- **Balanced** — combines travel time, transfers, walking, live crowding and disruption exposure. Near-equivalent viable routes can be distributed by a stable browser-session bucket so the prototype does not automatically send every session to the exact same route.
+- **Fastest** — prioritises travel time most strongly.
+- **Less crowded** — strongly penalises High/Moderate LTA crowd readings when available.
+- **Fewer transfers** — strongly penalises transfers.
+- **Less walking** — strongly penalises walking minutes.
+
+A route exposed to an active disruption receives a large penalty. Recommendation explanations are deterministic and generated from the route/LTA inputs; PulseRoute does not use an LLM for this.
+
+## My Journey disruption rerouting
+
+When My Journey sees a simulated or reachable live condition change, it looks for a route that is meaningfully different from the active journey.
+
+For disruptions it prioritises:
+
+1. avoiding the affected MRT line;
+2. meaningfully different transport modes;
+3. bus alternatives returned by OneMap;
+4. reasonable walking connections;
+5. lower crowding when available;
+6. reasonable time/transfer/walking trade-offs.
+
+If OneMap cannot supply an alternative, the local MRT reroute remains available. A dedicated **Simulation** scenario is also available for the hackathon demo and never masquerades as OneMap/LTA data.
+
+### Guaranteed offline multimodal demo
+
+In **My Journey**, choose **Load multimodal demo**, then **Simulate disruption**.
+
+The demonstration journey is **Bugis → Paya Lebar** on the EWL. The simulated relief option is:
+
+```text
+Walk → Bus 7 → Walk
+```
+
+The demo uses the real Bus 7 corridor and real bus-stop codes `01112` (Opp Bugis Stn Exit C) and `82011` (Aft Paya Lebar Quarter), but the walking and travel durations are intentionally illustrative and the route is prominently labelled **Simulation**.
+
+If a valid OneMap token is available and OneMap returns a suitable real multimodal alternative, that real OneMap alternative takes precedence.
+
+## LTA DataMall
+
+Official resources:
+
+- DataMall: https://datamall.lta.gov.sg/content/datamall/en.html
+- Request API access: https://datamall.lta.gov.sg/content/datamall/en/request-for-api.html
 - Current API User Guide: https://datamall.lta.gov.sg/content/dam/datamall/datasets/LTA_DataMall_API_User_Guide.pdf
 
-Paste the issued **Account Key** into Settings. PulseRoute sends it only in the documented `AccountKey` request header.
+PulseRoute sends the configured Account Key in the documented `AccountKey` HTTP request header.
 
-PulseRoute currently attempts these official DataMall APIs directly from the browser:
+It currently attempts:
 
-- `https://datamall2.mytransport.sg/ltaodataservice/TrainServiceAlerts`
-- `https://datamall2.mytransport.sg/ltaodataservice/PCDRealTime?TrainLine=<line>`
+- `TrainServiceAlerts`
+- `PCDRealTime?TrainLine=<line>`
+- `v3/BusArrival?BusStopCode=<code>&ServiceNo=<service>` for eligible bus legs
 
-The current LTA guide documents Train Service Alerts as ad-hoc service-unavailability information and Station Crowd Density Real Time as 10-minute MRT/LRT crowdedness readings.
+The current DataMall v6.9 guide (3 Aug 2026) documents Bus Arrival v3 at:
 
-### Important browser/CORS limitation
+```text
+https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival
+```
 
-LTA's current DataMall guide documents HTTPS GET requests with an `AccountKey` header, illustrated through Postman. It does **not** document browser CORS support. A frontend-only browser may therefore block the direct cross-origin request before JavaScript can read the response.
+Bus Arrival occupancy codes are displayed using the official meanings:
 
-PulseRoute does not hide this limitation and does not silently add a proxy. If the browser blocks the call, Settings/Live Updates shows a connection failure such as:
+- `SEA` → **Seats available**
+- `SDA` → **Standing available**
+- `LSD` → **Limited standing**
 
-> Direct DataMall access is blocked in this browser or network. PulseRoute is using its local/demo data.
+Next-bus time is rounded down to whole minutes; under one minute is displayed as **Arr**, matching LTA's frontend guidance.
 
-The rest of the product continues to work.
+### Browser/CORS limitation
 
-OneMap's current Search documentation includes JavaScript `fetch` examples using the `Authorization` header, so its browser integration is attempted directly. Actual success still depends on the current OneMap service/browser policy and a valid user token; PulseRoute falls back safely if the request fails.
+DataMall's current official guide documents HTTPS GET requests with an `AccountKey` header and illustrates them through Postman. It does **not** document browser CORS support. A frontend-only browser may therefore reject the cross-origin preflight.
 
-## Credential handling
+PulseRoute does not hide this and does not add a proxy. If direct DataMall access is blocked:
 
-This frontend-only setup is intentionally suitable for a hackathon/demo, **not for production secret storage**.
-
-PulseRoute:
-
-- stores OneMap and LTA credentials only in `sessionStorage`;
-- masks credential fields by default;
-- provides show/hide controls;
-- never writes credentials to `localStorage`;
-- never places credentials in URLs;
-- never logs credentials to the console;
-- never hard-codes or commits credentials;
-- provides per-service Clear buttons and **Clear all credentials**.
-
-Because this is a browser application, credentials entered in Settings are visible to the browser/application itself. They should not be treated as server-side secrets.
+- Live Updates reports the connection failure;
+- LTA crowd/disruption data is omitted;
+- Bus Arrival/occupancy is omitted;
+- OneMap/local routing and the hackathon simulation keep working.
 
 ## Data-source labels
 
-PulseRoute makes the source visible in the interface:
-
 | Label | Meaning |
 | --- | --- |
-| **OneMap** | Route came from a successful OneMap routing response. |
-| **LTA DataMall — Live** | Data came from a successful direct DataMall request during this session. |
-| **PulseRoute network model** | Route came from the local MRT graph. |
-| **Simulation** | Hackathon-only simulated crowding/disruption condition. |
+| **OneMap** | Successful OneMap public-transport itinerary. |
+| **LTA DataMall — Live** | Successful authenticated DataMall response in the current browser session. |
+| **PulseRoute network model** | Local MRT-only routing fallback. |
+| **Simulation** | Explicit hackathon simulation; never presented as official data. |
 
-The interface never labels local fallback or simulated data as live government data.
+## Credential handling
 
-## My Journey demo
+This frontend-only setup is for a hackathon/demo, not production secret storage. PulseRoute:
 
-The intended hackathon walkthrough is:
+- uses `sessionStorage` only;
+- masks credential fields by default;
+- never places credentials in URLs;
+- never logs credentials;
+- never hard-codes or commits credentials;
+- provides individual Clear controls and **Clear all credentials**.
 
-1. Plan and start a journey.
-2. Open **My Journey** and show the normal **Journey on track** state.
-3. Show current leg, next transfer, ETA, arrival confidence and crowding.
-4. Trigger **Simulate crowding** or **Simulate disruption**.
-5. PulseRoute explains what changed and offers a proactive reroute.
-6. Compare new ETA, extra travel time, crowding and estimated on-time probability.
-7. Choose **Switch route** or **Keep current route**.
-8. Restore normal conditions and repeat as needed.
+## Suggested judge walkthrough
 
-The simulation controls are explicitly labelled simulation. Reachable LTA DataMall changes feed into the same journey-monitor logic automatically.
-
-## Local MRT fallback
-
-The built-in graph covers operational stations represented in `src/data/mrtNetwork.js` across NSL, EWL/Changi branch, NEL, CCL including CCL6, DTL and the operational TEL section represented by the project. Future/unopened stations are kept separate from operational routing.
-
-Autocomplete accepts station names and station codes and uses typo-tolerant matching.
+1. In **Plan a Trip**, show a OneMap result with bus/walking legs if your token is working.
+2. Point out duration, walking time/distance, transfers, crowding and the deterministic recommendation explanation.
+3. Change **Balanced → Fastest → Less crowded → Fewer transfers → Less walking** and show why ordering changes.
+4. Start a route and open **My Journey**.
+5. Show the normal **Journey on track** state.
+6. Use **Load multimodal demo** for Bugis → Paya Lebar.
+7. Press **Simulate disruption**.
+8. Show the **Simulation** Bus 7 + walking relief option, the extra-time/walking/crowding trade-off, and why it avoids the EWL.
+9. If DataMall direct browser access works, point out the separate **LTA DataMall — Live** next-bus/occupancy badge.
+10. Press **Switch route**, then explain that real OneMap alternatives take precedence whenever available.
 
 ## Build verification
 
-The repository includes a GitHub Actions workflow that runs:
+The repository's GitHub Actions workflow runs:
 
 ```bash
-npm ci
+npm install
 npm run build
 ```
 
-You can perform the same production check locally with `npm run build`.
+The app must remain fully usable with neither credential configured.
