@@ -28,8 +28,8 @@ function canonicalEdge(edge) {
 }
 
 function parseClock(value) {
-  const [hours, minutes] = String(value || '09:50').split(':').map(Number);
-  return (Number.isFinite(hours) ? hours : 9) * 60 + (Number.isFinite(minutes) ? minutes : 50);
+  const [hours, minutes] = String(value || '09:00').split(':').map(Number);
+  return (Number.isFinite(hours) ? hours : 9) * 60 + (Number.isFinite(minutes) ? minutes : 0);
 }
 
 function clockText(totalMinutes) {
@@ -79,21 +79,24 @@ function segmentsFromEdges(edges) {
   for (const edge of edges) {
     const last = segments[segments.length - 1];
     if (!last || last.line !== edge.line) {
-      segments.push({ line: edge.line, stations: [edge.from, edge.to] });
+      segments.push({ line: edge.line, label: edge.line, mode: 'RAIL', stations: [edge.from, edge.to] });
     } else if (last.stations[last.stations.length - 1] !== edge.to) {
       last.stations.push(edge.to);
     }
   }
-  return segments;
+  return segments.map(segment => ({
+    ...segment,
+    stopCount: Math.max(0, segment.stations.length - 1),
+  }));
 }
 
-function buildRoute(path, index, arrivalTime = '09:50', source = 'PulseRoute MRT graph') {
+function buildRoute(path, index, departureTime = '09:00', source = 'PulseRoute network model') {
   const segments = segmentsFromEdges(path.edges);
   const stationSequence = [path.edges[0]?.from, ...path.edges.map(edge => edge.to)].filter(Boolean);
   const transfers = Math.max(0, segments.length - 1);
   const durationMinutes = Math.max(1, Math.round(path.cost));
-  const arrivalMinute = parseClock(arrivalTime);
-  const departureMinute = arrivalMinute - durationMinutes;
+  const departureMinute = parseClock(departureTime);
+  const arrivalMinute = departureMinute + durationMinutes;
   const lineNames = segments.map(segment => segment.line);
   const transferStations = segments.slice(0, -1).map(segment => segment.stations[segment.stations.length - 1]);
   const title = lineNames.length ? lineNames.join(' → ') : 'MRT';
@@ -105,6 +108,8 @@ function buildRoute(path, index, arrivalTime = '09:50', source = 'PulseRoute MRT
   return {
     id: `mrt-${index}-${pathSignature(path)}`,
     source,
+    sourceKind: 'model',
+    modelRoute: true,
     shortTitle: title,
     title: lineNames.map(code => LINE_META[code]?.name || code).join(' → '),
     detail,
@@ -115,15 +120,15 @@ function buildRoute(path, index, arrivalTime = '09:50', source = 'PulseRoute MRT
     transfers,
     walkingMinutes: 0,
     confidence: Math.round(confidence),
+    confidenceSource: 'PulseRoute estimate',
     reliability: confidence / 100,
-    crowdLabel: 'Crowding checked separately',
+    crowdLabel: 'LTA crowd data when available',
     score: Math.max(50, 100 - durationMinutes - transfers * 5),
     lines: lineNames,
     segments,
     stationSequence,
     origin: stationSequence[0],
     destination: stationSequence[stationSequence.length - 1],
-    googleRoute: false,
   };
 }
 
@@ -145,26 +150,34 @@ export function planMrtRoutes(origin, destination, options = {}) {
 
   const candidates = [best];
   for (const edge of best.edges) {
-    const alt = dijkstra(origin, destination, { ...options, bannedEdges: [...(options.bannedEdges || []), canonicalEdge(edge)] });
+    const alt = dijkstra(origin, destination, {
+      ...options,
+      bannedEdges: [...(options.bannedEdges || []), canonicalEdge(edge)],
+    });
     if (alt) candidates.push(alt);
   }
 
   for (const line of new Set(best.edges.map(edge => edge.line))) {
-    const alt = dijkstra(origin, destination, { ...options, linePenalties: { ...(options.linePenalties || {}), [line]: 1.4 } });
+    const alt = dijkstra(origin, destination, {
+      ...options,
+      linePenalties: { ...(options.linePenalties || {}), [line]: 1.4 },
+    });
     if (alt) candidates.push(alt);
   }
 
   return uniquePaths(candidates)
     .sort((a, b) => a.cost - b.cost)
     .slice(0, 3)
-    .map((path, index) => buildRoute(path, index, options.arrivalTime));
+    .map((path, index) => buildRoute(path, index, options.departureTime));
 }
 
-export function buildReroute(origin, destination, affectedLine, arrivalTime = '09:50', mode = 'disruption') {
+export function buildReroute(origin, destination, affectedLine, departureTime = '09:00', mode = 'disruption') {
   const options = mode === 'disruption'
-    ? { avoidLines: affectedLine ? [affectedLine] : [], arrivalTime }
-    : { linePenalties: affectedLine ? { [affectedLine]: 2.4 } : {}, arrivalTime };
-  return planMrtRoutes(origin, destination, options)[0] || planMrtRoutes(origin, destination, { arrivalTime })[0] || null;
+    ? { avoidLines: affectedLine ? [affectedLine] : [], departureTime }
+    : { linePenalties: affectedLine ? { [affectedLine]: 2.4 } : {}, departureTime };
+  return planMrtRoutes(origin, destination, options)[0]
+    || planMrtRoutes(origin, destination, { departureTime })[0]
+    || null;
 }
 
 export function routeUsesLine(route, line) {
