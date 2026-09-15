@@ -97,14 +97,29 @@ export async function fetchGoogleTransitRoutes({ origin, destination, arrivalIso
   return normaliseGoogleRoutes(payload, origin, destination);
 }
 
+function singaporeDateParts(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Singapore',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  return Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+}
+
 export function singaporeArrivalIso(clockValue) {
   const [hour, minute] = String(clockValue || '09:50').split(':').map(Number);
   const now = new Date();
-  const singaporeNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
-  const year = singaporeNow.getFullYear();
-  const month = String(singaporeNow.getMonth() + 1).padStart(2, '0');
-  const day = String(singaporeNow.getDate()).padStart(2, '0');
+  const parts = singaporeDateParts(now);
   const hh = String(Number.isFinite(hour) ? hour : 9).padStart(2, '0');
   const mm = String(Number.isFinite(minute) ? minute : 50).padStart(2, '0');
-  return `${year}-${month}-${day}T${hh}:${mm}:00+08:00`;
+  let candidate = new Date(`${parts.year}-${parts.month}-${parts.day}T${hh}:${mm}:00+08:00`);
+
+  if (candidate.getTime() <= now.getTime() + 5 * 60 * 1000) {
+    candidate = new Date(candidate.getTime() + 24 * 60 * 60 * 1000);
+    const next = singaporeDateParts(candidate);
+    return `${next.year}-${next.month}-${next.day}T${hh}:${mm}:00+08:00`;
+  }
+
+  return `${parts.year}-${parts.month}-${parts.day}T${hh}:${mm}:00+08:00`;
 }
