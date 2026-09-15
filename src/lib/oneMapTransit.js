@@ -233,7 +233,7 @@ function normaliseLeg(leg, index, origin, destination) {
   };
 }
 
-function normaliseOneMapItinerary(itinerary, index, origin, destination) {
+export function normaliseOneMapItinerary(itinerary, index, origin, destination) {
   const rawLegs = Array.isArray(itinerary?.legs) ? itinerary.legs : [];
   const legs = rawLegs.map((leg, legIndex) => normaliseLeg(leg, legIndex, origin, destination));
   const transitLegs = legs.filter(leg => leg.mode !== 'WALK');
