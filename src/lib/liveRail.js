@@ -1,4 +1,4 @@
-import { STATION_BY_CODE } from '../data/mrtNetwork.js';
+import { STATION_BY_CODE, STATION_BY_NAME } from '../data/mrtNetwork.js';
 
 const levelMap = { l: 'Low', m: 'Moderate', h: 'High', na: 'Unavailable' };
 
@@ -36,11 +36,15 @@ export function crowdRows(payload) {
   );
 }
 
+function routeCodes(route) {
+  return new Set((route?.stationSequence || []).flatMap(name => STATION_BY_NAME[name]?.codes || []));
+}
+
 export function crowdForRoute(payload, route) {
-  const codes = new Set((route?.stationSequence || []).flatMap(name => STATION_BY_CODE[name]?.codes || []));
+  const codes = routeCodes(route);
   const stationNames = new Set(route?.stationSequence || []);
   const rows = crowdRows(payload).filter(row => stationNames.has(row.station) || codes.has(row.code));
-  if (!rows.length) return { label: 'Unknown', source: payload?.configured ? 'LTA has no crowd reading for this route' : 'Demo estimate' };
+  if (!rows.length) return { label: 'Unknown', source: payload?.configured ? 'No current LTA crowd reading for this route' : 'Unavailable' };
   if (rows.some(row => row.level === 'High')) return { label: 'High', source: 'LTA Station Crowd Density' };
   if (rows.some(row => row.level === 'Moderate')) return { label: 'Moderate', source: 'LTA Station Crowd Density' };
   return { label: 'Low', source: 'LTA Station Crowd Density' };
@@ -50,6 +54,6 @@ export function alertAffectsRoute(alert, route) {
   if (!alert || !route) return false;
   if (alert.Line && route.lines?.includes(alert.Line)) return true;
   const affectedCodes = String(alert.Stations || '').split(',').map(value => value.trim()).filter(Boolean);
-  const routeCodes = new Set((route.stationSequence || []).flatMap(name => STATION_BY_CODE[name]?.codes || []));
-  return affectedCodes.some(code => routeCodes.has(code));
+  const codes = routeCodes(route);
+  return affectedCodes.some(code => codes.has(code));
 }
