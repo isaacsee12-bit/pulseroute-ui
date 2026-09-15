@@ -1,251 +1,432 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import {
+  Activity,
   AlertTriangle,
   ArrowDownUp,
   ArrowRight,
-  Bus,
+  BarChart3,
   CalendarDays,
+  Check,
   ChevronDown,
   ChevronRight,
+  CircleHelp,
   Clock3,
+  Gauge,
+  Info,
+  Layers3,
   MapPin,
   Menu,
   Navigation,
+  RefreshCw,
+  Route,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   TrainFront,
-  TrendingUp,
+  TrendingDown,
   Users,
-  X,
 } from 'lucide-react';
 import './styles.css';
-import './polish.css';
 import InteractiveTransitMap from './InteractiveTransitMap.jsx';
+import {
+  ABOUT_PILLARS,
+  CROWDING,
+  DEMO_STATIONS,
+  INCIDENT,
+  LINE_STATUS,
+  OPERATOR_ALTERNATIVES,
+  ROUTE_OPTIONS,
+} from './data/demoData.js';
+import { allocateDemand, rankRoutes } from './lib/pulseEngine.js';
 
-const routes = [
-  {
-    id: 'bus33',
-    title: 'Downtown Line → Circle Line',
-    detail: 'Tampines (DT32) → MacPherson (DT26/CC10) → Buona Vista (CC22)',
-    arrival: '9:42 AM',
-    chance: 82,
-    crowd: 'Less crowded',
-    type: 'rail',
-    featured: true,
-  },
-  {
-    id: 'bus168',
-    title: 'East-West Line → Circle Line',
-    detail: 'Tampines (EW2) → Paya Lebar (EW8/CC9) → Buona Vista (CC22)',
-    arrival: '9:45 AM',
-    chance: 76,
-    crowd: 'Good availability',
-    type: 'rail',
-  },
-  {
-    id: 'bedok',
-    title: 'DTL via Botanic Gardens → CCL',
-    detail: 'Tampines (DT32) → Botanic Gardens (DT9/CC19) → Buona Vista (CC22)',
-    arrival: '9:46 AM',
-    chance: 74,
-    crowd: 'Moderate',
-    type: 'rail',
-  },
+const TABS = [
+  ['plan', 'Plan a Trip'],
+  ['live', 'Live Updates'],
+  ['operators', 'For Operators'],
+  ['about', 'About'],
 ];
 
-const pressure = [
-  ['Tampines', 'High', 'Higher than usual crowding'],
-  ['Expo', 'High', 'Higher than usual crowding'],
-  ['Buona Vista', 'Moderate', 'Some crowding expected'],
+const PREFS = [
+  ['balanced', 'Balanced'],
+  ['fastest', 'Fastest'],
+  ['quiet', 'Less crowded'],
+  ['simple', 'Fewer transfers'],
+  ['accessible', 'Accessible'],
 ];
 
-function Brand() {
+function getInitialTab() {
+  const hash = window.location.hash.replace('#', '');
+  return TABS.some(([id]) => id === hash) ? hash : 'plan';
+}
+
+function Brand({ onClick }) {
   return (
-    <div className="brand">
-      <div className="brand-mark"><TrainFront size={22} strokeWidth={2.8} /></div>
-      <div>
-        <div className="brand-name">PulseRoute</div>
-        <div className="brand-tag">Smarter journeys. A more resilient city.</div>
-      </div>
-    </div>
+    <button className="brand" type="button" onClick={onClick} aria-label="Go to Plan a Trip">
+      <span className="brand-mark"><TrainFront size={22} strokeWidth={2.8} /></span>
+      <span className="brand-copy">
+        <span className="brand-name">PulseRoute</span>
+        <span className="brand-tag">Smarter journeys. A more resilient city.</span>
+      </span>
+    </button>
   );
 }
 
-function TopBar() {
-  const [open, setOpen] = useState(false);
+function TopBar({ activeTab, onNavigate, profile, setProfile }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+
   return (
     <header className="topbar">
-      <Brand />
-      <nav className={open ? 'nav-links open' : 'nav-links'}>
-        {['Plan a Trip', 'Live Updates', 'For Operators', 'About'].map((item, i) => (
-          <button className={i === 0 ? 'nav-link active' : 'nav-link'} key={item}>{item}</button>
+      <Brand onClick={() => onNavigate('plan')} />
+      <nav className={menuOpen ? 'nav-links open' : 'nav-links'} aria-label="Primary navigation">
+        {TABS.map(([id, label]) => (
+          <button
+            type="button"
+            className={activeTab === id ? 'nav-link active' : 'nav-link'}
+            key={id}
+            onClick={() => { onNavigate(id); setMenuOpen(false); }}
+          >
+            {label}
+          </button>
         ))}
       </nav>
       <div className="top-actions">
-        <div className="live"><span className="live-dot" />Live data</div>
-        <div className="location"><MapPin size={16} />Singapore<ChevronDown size={15} /></div>
-        <div className="avatar">JD</div>
-        <button className="icon-button desktop-only"><ChevronDown size={18} /></button>
-        <button className="icon-button menu-button" onClick={() => setOpen(v => !v)}><Menu size={21} /></button>
+        <span className="demo-feed"><span className="live-dot" />Demo network feed</span>
+        <span className="location-indicator"><MapPin size={15} />Singapore</span>
+        <div className="profile-wrap">
+          <button type="button" className="profile-button" onClick={() => setProfileOpen(value => !value)} aria-expanded={profileOpen}>
+            <span className="avatar">JD</span><ChevronDown size={16} />
+          </button>
+          {profileOpen && (
+            <div className="profile-popover">
+              <strong>Journey preferences</strong>
+              <label><input type="checkbox" checked={profile.avoidCrowds} onChange={event => setProfile({ ...profile, avoidCrowds: event.target.checked })} /> Prefer less crowded routes</label>
+              <label><input type="checkbox" checked={profile.stepFree} onChange={event => setProfile({ ...profile, stepFree: event.target.checked })} /> Prefer step-free transfers</label>
+              <label className="walk-setting">Maximum walking <select value={profile.maxWalking} onChange={event => setProfile({ ...profile, maxWalking: Number(event.target.value) })}><option value={5}>5 min</option><option value={10}>10 min</option><option value={15}>15 min</option></select></label>
+            </div>
+          )}
+        </div>
+        <button type="button" className="menu-button" onClick={() => setMenuOpen(value => !value)} aria-label="Open navigation"><Menu size={21} /></button>
       </div>
     </header>
   );
 }
 
-function TripField({ label, value, onClear, icon = MapPin }) {
-  const Icon = icon;
+function PageHeading({ eyebrow, title, copy, actions }) {
   return (
-    <div className="trip-field">
-      <Icon size={21} className="field-icon" />
-      <div className="field-copy">
-        <span>{label}</span>
-        <strong>{value}</strong>
+    <div className="page-heading">
+      <div>
+        {eyebrow && <span className="eyebrow">{eyebrow}</span>}
+        <h1>{title}</h1>
+        <p>{copy}</p>
       </div>
-      {onClear && <button className="clear-button" onClick={onClear}><X size={18} /></button>}
+      {actions && <div className="page-actions">{actions}</div>}
     </div>
   );
 }
 
-function RouteCard({ route, active, onSelect }) {
-  const ModeIcon = route.type === 'bus' ? Bus : TrainFront;
-  if (route.featured) {
-    return (
-      <button onClick={onSelect} className={`featured-route ${active ? 'selected' : ''}`}>
-        <div className="route-ribbon"><Sparkles size={17} /> Recommended for you</div>
-        <div className="crowd-chip"><Users size={16} /> Less crowded</div>
-        <div className="featured-main">
-          <div className="mode-flow"><div className="mode-square"><TrainFront /></div><ArrowRight /><div className="mode-square"><TrainFront /></div></div>
-          <div className="route-copy">
-            <h3>{route.title}</h3>
-            <p>{route.detail}</p>
-          </div>
-          <ChevronRight className="route-chevron" />
-        </div>
-        <div className="route-metrics">
-          <div className="metric"><Clock3 /><div><span>Estimated arrival</span><strong>{route.arrival}</strong></div></div>
-          <div className="metric"><ShieldCheck className="green-icon" /><div><strong>{route.chance}% chance</strong><span>of arriving before 9:50 AM</span></div></div>
-          <div className="metric"><Users className="blue-icon" /><div><strong>Less crowded</strong><span>8 minutes slower than the nominal fastest route.</span></div></div>
-        </div>
-      </button>
-    );
-  }
+function SelectField({ label, value, onChange }) {
   return (
-    <button onClick={onSelect} className={`compact-route ${active ? 'selected' : ''}`}>
-      <div className="compact-top">
-        <div className="mode-flow small"><div className="mode-square"><ModeIcon /></div><ArrowRight /><div className="mode-square secondary"><TrainFront /></div></div>
-        <div className="route-copy compact-copy"><h4>{route.title}</h4><p>{route.detail}</p></div>
-        <ChevronRight />
-      </div>
-      <div className="compact-metrics">
-        <div><Clock3 /><span>Arrival <strong>{route.arrival}</strong></span></div>
-        <div><ShieldCheck className="green-icon" /><span><strong>{route.chance}% chance</strong><small>of arriving before 9:50 AM</small></span></div>
-      </div>
-    </button>
+    <label className="control-field">
+      <MapPin size={19} />
+      <span><small>{label}</small><select value={value} onChange={event => onChange(event.target.value)}>{DEMO_STATIONS.map(station => <option key={station}>{station}</option>)}</select></span>
+    </label>
   );
 }
 
-function NetworkSidebar() {
-  const alternatives = [
-    ['DTL → CCL', 'Good availability'],
-    ['EWL → CCL', 'Good availability'],
-    ['DTL via Botanic Gardens', 'Moderate'],
-  ];
-
+function RouteCard({ route, recommended, selected, onSelect, onStart }) {
   return (
-    <aside className="network-panel">
-      <div className="network-heading">
-        <div className="network-icon"><TrendingUp /></div>
-        <div><h2>Network Context</h2><p>Key information from real-time data to help you plan better.</p></div>
-      </div>
-
-      <section className="side-card passenger-card">
-        <h3><Users /> Affected passengers</h3>
-        <div className="impact-row">
-          <div className="impact-main"><div className="impact-icon"><Users /></div><div><strong>12,480</strong><span>Estimated affected journeys</span></div></div>
-          <div className="impact-delta"><TrendingUp /><strong>+28%</strong><span>vs. typical Tuesday</span></div>
-        </div>
-        <div className="impact-summary">
-          <div><TrainFront /><span><strong>4 stations affected</strong><small>Along the East-West Line</small></span></div>
-          <div><Navigation /><span><strong>3 alternative routes</strong><small>available</small></span></div>
-        </div>
-      </section>
-
-      <section className="side-card pressure-card">
-        <h3><TrainFront /> Stations under pressure</h3>
-        <p className="subtle">Based on real-time crowding data</p>
-        <div className="pressure-list">
-          {pressure.map(([station, level, note]) => (
-            <div className="pressure-row" key={station}>
-              <span className={`status-dot ${level === 'Moderate' ? 'moderate' : ''}`} />
-              <strong>{station}</strong>
-              <span className={`pressure-pill ${level === 'Moderate' ? 'moderate' : ''}`}>{level}</span>
-              <small>{note}</small>
+    <article className={`route-card ${recommended ? 'recommended' : ''} ${selected ? 'selected' : ''}`}>
+      <button className="route-card-select" type="button" onClick={onSelect} aria-label={`Select ${route.shortTitle}`}>
+        <div className="route-card-top">
+          <div className="route-icons"><span><TrainFront /></span><ArrowRight size={16} /><span><TrainFront /></span></div>
+          <div className="route-card-copy">
+            <div className="route-card-labels">
+              {recommended && <span className="recommendation-pill"><Sparkles size={13} />Recommended</span>}
+              <span className={`crowd-pill ${route.crowdLabel === 'Busier' ? 'busy' : ''}`}>{route.crowdLabel}</span>
             </div>
-          ))}
+            <h3>{route.shortTitle}</h3>
+            <p>{route.detail}</p>
+          </div>
+          <ChevronRight size={20} />
+        </div>
+        <div className="route-stats">
+          <span><Clock3 /> <b>{route.baseMinutes} min</b><small>ETA {route.arrival}</small></span>
+          <span><ShieldCheck /> <b>{route.confidence}% confidence</b><small>arrival reliability</small></span>
+          <span><Gauge /> <b>{route.score}/100 fit</b><small>{route.reasons.join(' · ') || 'balanced option'}</small></span>
+        </div>
+      </button>
+      {recommended && <button className="start-route" type="button" onClick={onStart}>Start this route <ArrowRight size={17} /></button>}
+    </article>
+  );
+}
+
+function JourneyActive({ route, onEnd }) {
+  return (
+    <div className="journey-active">
+      <div className="journey-active-icon"><Navigation /></div>
+      <div><span>Journey started</span><strong>{route.shortTitle}</strong><small>PulseRoute will keep this recommendation under review as network conditions change.</small></div>
+      <button type="button" onClick={onEnd}>End journey</button>
+    </div>
+  );
+}
+
+function NetworkContext({ ranked }) {
+  return (
+    <aside className="context-column">
+      <section className="context-card">
+        <div className="card-heading"><AlertTriangle className="danger" /><div><h3>Active disruption</h3><p>{INCIDENT.segment}</p></div></div>
+        <div className="incident-summary"><strong>{INCIDENT.title}</strong><span>{INCIDENT.severity}</span><p>{INCIDENT.description}</p></div>
+      </section>
+      <section className="context-card">
+        <div className="card-heading"><Activity /><div><h3>Network conditions</h3><p>Relevant to this journey</p></div></div>
+        <div className="status-list">
+          {LINE_STATUS.slice(0, 3).map(line => <div key={line.code}><span className={`status-dot ${line.severity}`} /><b>{line.code}</b><span>{line.status}</span></div>)}
         </div>
       </section>
-
-      <section className="side-card alternatives-card">
-        <h3><Navigation /> Best alternatives right now</h3>
-        <p className="subtle">Based on current network conditions</p>
-        {alternatives.map(([name, availability], index) => (
-          <div className="alt-row" key={name}>
-            <span className="rank">{index + 1}</span>
-            <TrainFront />
-            <strong>{name}</strong>
-            <span className={`availability ${availability === 'Moderate' ? 'moderate' : ''}`}>{availability}</span>
-            <ChevronRight />
-          </div>
-        ))}
-      </section>
-
-      <section className="city-banner">
-        <div><strong>People move cities.<br/>We keep them moving.</strong><span>PulseRoute</span></div>
-        <svg viewBox="0 0 260 70" aria-hidden="true"><path d="M5 60h250M25 60V45h15v15M46 60V35h20v25M76 60V42h14v18M98 60V20h18v40M120 60V29h22v31M150 60V12h30v48M184 60V34h18v26M210 60V26h24v34" fill="none" stroke="currentColor" strokeWidth="2"/><circle cx="240" cy="40" r="20" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M240 20v40M220 40h40M226 26l28 28M254 26l-28 28" stroke="currentColor" strokeWidth="1.5"/></svg>
+      <section className="context-card why-card">
+        <div className="card-heading"><Sparkles /><div><h3>Why this route?</h3><p>Network-aware reasoning</p></div></div>
+        <p><b>{ranked[0].shortTitle}</b> scores highest because it {ranked[0].reasons.join(' and ')} while preserving spare capacity for other displaced passengers.</p>
+        <div className="why-metrics"><span><b>{Math.round(ranked[0].crowdHeadroom * 100)}%</b> spare capacity</span><span><b>{Math.round(ranked[0].reliability * 100)}%</b> route reliability</span></div>
       </section>
     </aside>
   );
 }
 
-function App() {
+function PlanPage({ profile }) {
   const [from, setFrom] = useState('Tampines');
   const [to, setTo] = useState('Buona Vista');
-  const [arrival, setArrival] = useState('9:50 AM');
-  const [activeRoute, setActiveRoute] = useState('bus33');
-  const active = useMemo(() => routes.find(r => r.id === activeRoute), [activeRoute]);
+  const [arrival, setArrival] = useState('09:50');
+  const [preference, setPreference] = useState('balanced');
+  const [submittedPreference, setSubmittedPreference] = useState('balanced');
+  const [selectedRouteId, setSelectedRouteId] = useState('bus33');
+  const [journeyRouteId, setJourneyRouteId] = useState(null);
+  const [validation, setValidation] = useState('');
+
+  const ranked = useMemo(() => rankRoutes(ROUTE_OPTIONS, submittedPreference, profile), [submittedPreference, profile]);
+  const selectedRoute = ranked.find(route => route.id === selectedRouteId) || ranked[0];
+  const journeyRoute = ranked.find(route => route.id === journeyRouteId);
+
+  useEffect(() => {
+    if (!ranked.some(route => route.id === selectedRouteId)) setSelectedRouteId(ranked[0].id);
+  }, [ranked, selectedRouteId]);
+
+  const getRoutes = () => {
+    if (from === to) {
+      setValidation('Origin and destination must be different.');
+      return;
+    }
+    setValidation('');
+    setSubmittedPreference(preference);
+    setSelectedRouteId(rankRoutes(ROUTE_OPTIONS, preference, profile)[0].id);
+    setJourneyRouteId(null);
+  };
 
   const swap = () => {
-    setFrom(to || 'Buona Vista');
-    setTo(from || 'Tampines');
+    setFrom(to);
+    setTo(from);
+    setValidation('');
   };
 
   return (
+    <main className="page-shell">
+      <PageHeading eyebrow="Commuter companion" title="Plan your journey" copy="Get disruption-aware recommendations that consider both your needs and the network's remaining capacity." />
+      <section className="planner-grid">
+        <div className="planner-main">
+          <div className="trip-builder card-surface">
+            <div className="trip-row">
+              <SelectField label="From" value={from} onChange={setFrom} />
+              <button className="swap-button" type="button" onClick={swap} title="Swap origin and destination"><ArrowDownUp size={19} /></button>
+              <SelectField label="To" value={to} onChange={setTo} />
+              <label className="control-field time-field"><Clock3 size={19} /><span><small>Arrive by</small><input type="time" value={arrival} onChange={event => setArrival(event.target.value)} /></span><CalendarDays size={16} /></label>
+            </div>
+            <div className="preference-row">
+              <div><SlidersHorizontal size={17} /><span>Journey preference</span></div>
+              <div className="preference-tabs">{PREFS.map(([id, label]) => <button type="button" key={id} className={preference === id ? 'active' : ''} onClick={() => setPreference(id)}>{label}</button>)}</div>
+              <button className="primary-button" type="button" onClick={getRoutes}>Get Routes <ArrowRight size={17} /></button>
+            </div>
+            {validation && <div className="validation-message"><AlertTriangle size={16} />{validation}</div>}
+            <p className="demo-corridor-note"><Info size={14} /> Demo corridor: route alternatives are modelled for Tampines → Buona Vista; station controls demonstrate the intended planner interaction.</p>
+          </div>
+
+          <div className="disruption-banner"><AlertTriangle /><div><strong>{INCIDENT.title}<span>{INCIDENT.severity}</span></strong><p>{INCIDENT.description}</p></div><small>Started {INCIDENT.startedAt}</small></div>
+
+          {journeyRoute && <JourneyActive route={journeyRoute} onEnd={() => setJourneyRouteId(null)} />}
+
+          <div className="results-heading"><div><span className="eyebrow">PulseRoute recommendation</span><h2>{ranked.length} viable alternatives</h2></div><span className="model-note"><ShieldCheck size={14} /> Demo scoring model</span></div>
+          <div className="routes-stack">
+            {ranked.map((route, index) => (
+              <RouteCard key={route.id} route={route} recommended={index === 0} selected={selectedRoute.id === route.id} onSelect={() => setSelectedRouteId(route.id)} onStart={() => { setSelectedRouteId(route.id); setJourneyRouteId(route.id); }} />
+            ))}
+          </div>
+          <InteractiveTransitMap activeRoute={selectedRoute.id} />
+        </div>
+        <NetworkContext ranked={ranked} />
+      </section>
+    </main>
+  );
+}
+
+function LivePage() {
+  const [tick, setTick] = useState(0);
+  const [updatedAt, setUpdatedAt] = useState(new Date());
+  const refresh = () => { setTick(value => value + 1); setUpdatedAt(new Date()); };
+
+  return (
+    <main className="page-shell">
+      <PageHeading
+        eyebrow="Demo network feed"
+        title="Live Updates"
+        copy="One place for disruption status, line conditions and crowding signals that could affect your next decision."
+        actions={<button type="button" className="secondary-button" onClick={refresh}><RefreshCw size={16} className={tick % 2 ? 'spin-once' : ''} />Refresh feed</button>}
+      />
+      <div className="feed-meta"><span className="live-dot" />Snapshot refreshed {updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · simulated data for hackathon demonstration</div>
+
+      <section className="live-hero">
+        <div className="live-hero-icon"><AlertTriangle /></div>
+        <div><span className="eyebrow danger-text">Major disruption</span><h2>{INCIDENT.title}</h2><p>{INCIDENT.description}</p><div className="incident-tags"><span>{INCIDENT.segment}</span><span>Started {INCIDENT.startedAt}</span><span>{INCIDENT.recovery}</span></div></div>
+        <div className="affected-number"><strong>{INCIDENT.affectedJourneys.toLocaleString()}</strong><span>estimated affected journeys</span></div>
+      </section>
+
+      <section className="dashboard-section">
+        <div className="section-title"><div><h2>Rail network status</h2><p>Prioritised by current commuter impact</p></div></div>
+        <div className="line-status-grid">{LINE_STATUS.map(line => <article key={line.code} className="line-status-card"><div className="line-status-code">{line.code}</div><div><h3>{line.name}</h3><span className={`service-badge ${line.severity}`}>{line.status}</span><p>{line.detail}</p></div></article>)}</div>
+      </section>
+
+      <section className="two-column-section">
+        <div className="card-surface roomy">
+          <div className="section-title compact"><div><h2>Stations under pressure</h2><p>Indicative crowding from the demo scenario</p></div></div>
+          <div className="crowd-list">{CROWDING.map((item, index) => { const level = Math.min(96, item.level + ((tick + index) % 3) * 2); return <div key={item.station} className="crowd-row"><div><b>{item.station}</b><small>{item.note}</small></div><div className="crowd-meter"><span style={{ width: `${level}%` }} /></div><strong>{level}%</strong></div>; })}</div>
+        </div>
+        <div className="card-surface roomy decision-card">
+          <div className="section-title compact"><div><h2>What commuters should do</h2><p>Decision support, not just an alert</p></div></div>
+          <div className="action-list">
+            <div><span>1</span><p><b>Avoid the disrupted EWL section</b><small>Use DTL/CCL alternatives where suitable.</small></p></div>
+            <div><span>2</span><p><b>Check crowd-aware alternatives</b><small>PulseRoute spreads demand rather than pushing everyone to one route.</small></p></div>
+            <div><span>3</span><p><b>Delay departure when flexible</b><small>Off-peak shifting protects capacity for time-sensitive trips.</small></p></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function UtilBar({ value, label }) {
+  const percent = Math.round(value * 100);
+  return <div className="util-wrap"><div className={`util-track ${percent > 100 ? 'over' : ''}`}><span style={{ width: `${Math.min(100, percent)}%` }} /></div><b>{label ?? `${percent}%`}</b></div>;
+}
+
+function OperatorsPage() {
+  const [demand, setDemand] = useState(4800);
+  const [strength, setStrength] = useState(85);
+  const [runStrength, setRunStrength] = useState(85);
+  const [runDemand, setRunDemand] = useState(4800);
+  const simulation = useMemo(() => allocateDemand(OPERATOR_ALTERNATIVES, runDemand, runStrength), [runDemand, runStrength]);
+
+  return (
+    <main className="page-shell operator-page">
+      <PageHeading eyebrow="Operations console" title="Network balancing" copy="Model how demand could redistribute across alternatives, then tune intervention strength before communicating recommendations." />
+
+      <section className="operator-controls card-surface">
+        <div className="scenario-control"><small>Incident scenario</small><strong>{INCIDENT.title}</strong><span>{INCIDENT.segment}</span></div>
+        <label><span>Displaced passengers / 15 min <b>{demand.toLocaleString()}</b></span><input type="range" min="2000" max="8000" step="200" value={demand} onChange={event => setDemand(Number(event.target.value))} /></label>
+        <label><span>Recommendation strength <b>{strength}%</b></span><input type="range" min="0" max="100" step="5" value={strength} onChange={event => setStrength(Number(event.target.value))} /></label>
+        <button className="primary-button" type="button" onClick={() => { setRunDemand(demand); setRunStrength(strength); }}>Run balancing simulation <Activity size={17} /></button>
+      </section>
+
+      <section className="kpi-grid">
+        <article><span><Users />Demand modelled</span><strong>{simulation.displacedDemand.toLocaleString()}</strong><small>passengers / 15 min</small></article>
+        <article><span><TrendingDown />Excess load avoided</span><strong>{simulation.avoided.toLocaleString()}</strong><small>passengers above nominal capacity</small></article>
+        <article><span><Check />Expected acceptance</span><strong>{simulation.acceptanceRate}%</strong><small>with current intervention strength</small></article>
+        <article><span><AlertTriangle />Residual overload</span><strong>{simulation.afterOverload.toLocaleString()}</strong><small>after balancing</small></article>
+      </section>
+
+      <section className="before-after card-surface roomy">
+        <div className="section-title"><div><h2>Before vs after PulseRoute</h2><p>Projected alternative-route utilisation under the same displaced demand.</p></div><span className="model-note"><CircleHelp size={14} />Simulation, not live LTA operations data</span></div>
+        <div className="comparison-grid">
+          <div><h3>Without balancing</h3><p className="comparison-copy">Most commuters independently converge on the most obvious alternative.</p>{simulation.baselineResults.map(item => <div className="capacity-row" key={item.id}><span>{item.label}</span><UtilBar value={item.utilisation} /></div>)}</div>
+          <div><h3>With PulseRoute</h3><p className="comparison-copy">Recommendations account for available headroom and spread demand.</p>{simulation.results.map(item => <div className="capacity-row" key={item.id}><span>{item.label}</span><UtilBar value={item.utilisation} /></div>)}</div>
+        </div>
+      </section>
+
+      <section className="allocation-section card-surface roomy">
+        <div className="section-title"><div><h2>Recommended demand allocation</h2><p>Allocation generated from current spare capacity and the selected intervention strength.</p></div></div>
+        <div className="allocation-table">
+          <div className="allocation-head"><span>Alternative</span><span>Allocation</span><span>Passengers</span><span>Projected load</span></div>
+          {simulation.results.map(item => <div className="allocation-row" key={item.id}><span><Route size={16} />{item.label}</span><b>{Math.round(item.share * 100)}%</b><span>{item.allocated.toLocaleString()}</span><span className={item.overloaded ? 'danger-text' : 'good-text'}>{Math.round(item.utilisation * 100)}%</span></div>)}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function AboutPage() {
+  return (
+    <main className="page-shell about-page">
+      <PageHeading eyebrow="Nebula X Hackathon 2026" title="Why PulseRoute exists" copy="A smart travel companion for disruption periods, designed around both individual commuter needs and whole-network resilience." />
+
+      <section className="about-hero card-surface roomy">
+        <div><span className="eyebrow">The problem</span><h2>Fastest-route thinking can create the next bottleneck.</h2><p>During a rail disruption, thousands of commuters may receive similar alternatives. If every journey planner independently optimises each person for the same shortest path, the recommended corridor can itself become overloaded.</p></div>
+        <div className="about-hero-visual"><div><Users /><strong>12,480</strong><span>affected journeys</span></div><ArrowRight /><div><Layers3 /><strong>5</strong><span>viable responses</span></div><ArrowRight /><div><Gauge /><strong>1</strong><span>balanced network</span></div></div>
+      </section>
+
+      <section className="dashboard-section">
+        <div className="section-title"><div><h2>How PulseRoute responds</h2><p>Three layers turn disruption data into coordinated decisions.</p></div></div>
+        <div className="pillar-grid">{ABOUT_PILLARS.map((pillar, index) => <article key={pillar.title}><span>0{index + 1}</span><h3>{pillar.title}</h3><p>{pillar.copy}</p></article>)}</div>
+      </section>
+
+      <section className="architecture card-surface roomy">
+        <div className="section-title"><div><h2>Prototype architecture</h2><p>Designed so the demo data layer can later be replaced by authoritative transport feeds.</p></div></div>
+        <div className="architecture-flow">
+          <div><span>Inputs</span><b>Service alerts</b><b>Crowding estimates</b><b>Capacity headroom</b><b>Commuter preferences</b></div>
+          <ArrowRight />
+          <div className="engine-node"><span>Decision engine</span><b>Route scoring</b><b>Demand allocation</b><b>Constraint checks</b></div>
+          <ArrowRight />
+          <div><span>Outputs</span><b>Personalised route</b><b>Live updates</b><b>Operator simulation</b><b>Impact metrics</b></div>
+        </div>
+      </section>
+
+      <section className="two-column-section">
+        <div className="card-surface roomy">
+          <div className="section-title compact"><div><h2>What is real in this prototype</h2><p>Implemented functionality</p></div></div>
+          <ul className="check-list"><li>Preference-aware route scoring</li><li>Capacity-aware demand allocation</li><li>Interactive route selection and map</li><li>Functional operator simulation controls</li><li>Responsive commuter and operator views</li></ul>
+        </div>
+        <div className="card-surface roomy">
+          <div className="section-title compact"><div><h2>Current limitations</h2><p>Explicitly disclosed for the hackathon demo</p></div></div>
+          <ul className="limit-list"><li>Network and crowding values are simulated demo data.</li><li>The journey planner models the Tampines → Buona Vista disruption corridor.</li><li>No production integration with LTA/rail operator control systems is claimed.</li><li>Capacity values are illustrative and require calibration against operational data.</li></ul>
+        </div>
+      </section>
+
+      <section className="impact-banner"><div><span className="eyebrow">North star</span><h2>Help each commuter make a better decision without making the network worse for everyone else.</h2></div><BarChart3 /></section>
+    </main>
+  );
+}
+
+function App() {
+  const [activeTab, setActiveTab] = useState(getInitialTab);
+  const [profile, setProfile] = useState({ avoidCrowds: true, stepFree: false, maxWalking: 10 });
+
+  const navigate = tab => {
+    setActiveTab(tab);
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${tab}`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    const onHash = () => setActiveTab(getInitialTab());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  return (
     <div className="app-shell">
-      <TopBar />
-      <main className="dashboard-grid">
-        <section className="journey-panel">
-          <div className="section-heading"><h1>Plan your journey</h1><p>Get intelligent route recommendations during disruptions.</p></div>
-          <div className="trip-controls">
-            <TripField label="From" value={from || 'Choose origin'} onClear={() => setFrom('')} />
-            <button className="swap-button" onClick={swap} title="Swap origin and destination"><ArrowDownUp size={21} /></button>
-            <TripField label="To" value={to || 'Choose destination'} onClear={() => setTo('')} />
-            <button className="trip-field arrival-field" onClick={() => setArrival(arrival === '9:50 AM' ? '10:00 AM' : '9:50 AM')}>
-              <Clock3 size={21} className="field-icon"/><div className="field-copy"><span>Arrive by</span><strong>{arrival}</strong></div><CalendarDays size={18}/>
-            </button>
-            <button className="get-routes" onClick={() => setActiveRoute('bus33')}>Get Routes <ArrowRight size={20} /></button>
-          </div>
-
-          <div className="disruption-banner"><AlertTriangle /><div><strong>East-West Line disruption <span>Major delay</span></strong><p>No train service between Jurong East and Buona Vista due to a track fault. Expect longer journey times.</p></div><small>Updated 8:15 AM</small></div>
-
-          <RouteCard route={routes[0]} active={activeRoute === routes[0].id} onSelect={() => setActiveRoute(routes[0].id)} />
-          <div className="compact-grid">
-            {routes.slice(1).map(route => <RouteCard key={route.id} route={route} active={activeRoute === route.id} onSelect={() => setActiveRoute(route.id)} />)}
-          </div>
-          <InteractiveTransitMap activeRoute={active?.id} />
-        </section>
-        <NetworkSidebar />
-      </main>
+      <TopBar activeTab={activeTab} onNavigate={navigate} profile={profile} setProfile={setProfile} />
+      {activeTab === 'plan' && <PlanPage profile={profile} />}
+      {activeTab === 'live' && <LivePage />}
+      {activeTab === 'operators' && <OperatorsPage />}
+      {activeTab === 'about' && <AboutPage />}
+      <footer className="footer"><span>PulseRoute · Nebula X Hackathon 2026 prototype</span><span>Demo data clearly labelled · Built for disruption-aware decision support</span></footer>
     </div>
   );
 }
