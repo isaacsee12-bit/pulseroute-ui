@@ -1,3 +1,5 @@
+import { apiKeyHeaders, loadApiKeys } from './apiKeys.js';
+
 function parseDurationSeconds(value) {
   if (!value) return 0;
   const match = String(value).match(/^([0-9.]+)s$/);
@@ -83,9 +85,12 @@ export function normaliseGoogleRoutes(payload, origin, destination) {
   });
 }
 
-export async function fetchGoogleTransitRoutes({ origin, destination, arrivalIso, preference }) {
+export async function fetchGoogleTransitRoutes({ origin, destination, arrivalIso, preference, apiKeys = loadApiKeys() }) {
   const params = new URLSearchParams({ origin, destination, arrivalIso, preference });
-  const response = await fetch(`/api/transit-route?${params.toString()}`, { cache: 'no-store' });
+  const response = await fetch(`/api/transit-route?${params.toString()}`, {
+    cache: 'no-store',
+    headers: apiKeyHeaders(apiKeys),
+  });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const error = new Error(body.error || 'Google transit routing is unavailable.');
