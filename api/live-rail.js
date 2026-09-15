@@ -1,4 +1,4 @@
-const LINES = ['NSL', 'EWL', 'NEL', 'CCL', 'DTL', 'TEL'];
+const LTA_CROWD_LINES = ['NSL', 'EWL', 'CGL', 'NEL', 'CCL', 'CEL', 'DTL', 'TEL'];
 let memoryCache = { expiresAt: 0, payload: null };
 
 async function ltaGet(path, key) {
@@ -34,10 +34,12 @@ export default async function handler(req, res) {
   try {
     const [alerts, ...crowdResponses] = await Promise.all([
       ltaGet('TrainServiceAlerts', key),
-      ...LINES.map(line => ltaGet(`PCDRealTime?TrainLine=${encodeURIComponent(line)}`, key).catch(() => [])),
+      ...LTA_CROWD_LINES.map(line => ltaGet(`PCDRealTime?TrainLine=${encodeURIComponent(line)}`, key).catch(() => [])),
     ]);
 
-    const crowd = Object.fromEntries(LINES.map((line, index) => [line, Array.isArray(crowdResponses[index]) ? crowdResponses[index] : []]));
+    const crowd = Object.fromEntries(
+      LTA_CROWD_LINES.map((line, index) => [line, Array.isArray(crowdResponses[index]) ? crowdResponses[index] : []]),
+    );
     const payload = {
       configured: true,
       fetchedAt: new Date().toISOString(),
