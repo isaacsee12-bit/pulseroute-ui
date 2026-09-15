@@ -79,26 +79,49 @@ function segmentsFromEdges(edges) {
   for (const edge of edges) {
     const last = segments[segments.length - 1];
     if (!last || last.line !== edge.line) {
-      segments.push({ line: edge.line, label: edge.line, mode: 'RAIL', stations: [edge.from, edge.to] });
+      segments.push({ line: edge.line, stations: [edge.from, edge.to] });
     } else if (last.stations[last.stations.length - 1] !== edge.to) {
       last.stations.push(edge.to);
     }
   }
-  return segments.map(segment => ({
-    ...segment,
-    stopCount: Math.max(0, segment.stations.length - 1),
-  }));
+
+  return segments.map(segment => {
+    const stopCount = Math.max(0, segment.stations.length - 1);
+    const durationMinutes = Math.max(1, Math.round(stopCount * BASE_EDGE_MINUTES));
+    const from = segment.stations[0];
+    const to = segment.stations[segment.stations.length - 1];
+    return {
+      mode: 'SUBWAY',
+      from,
+      to,
+      durationMinutes,
+      durationSeconds: durationMinutes * 60,
+      distanceMetres: null,
+      service: segment.line,
+      line: segment.line,
+      label: LINE_META[segment.line]?.name || segment.line,
+      headsign: '',
+      stopCount,
+      departure: '',
+      arrival: '',
+      fromStopCode: '',
+      toStopCode: '',
+      intermediateStops: segment.stations.slice(1, -1).map(name => ({ name, stopCode: '' })),
+      stations: segment.stations,
+      geometry: null,
+    };
+  });
 }
 
 function buildRoute(path, index, departureTime = '09:00', source = 'PulseRoute network model') {
-  const segments = segmentsFromEdges(path.edges);
+  const legs = segmentsFromEdges(path.edges);
   const stationSequence = [path.edges[0]?.from, ...path.edges.map(edge => edge.to)].filter(Boolean);
-  const transfers = Math.max(0, segments.length - 1);
+  const transfers = Math.max(0, legs.length - 1);
   const durationMinutes = Math.max(1, Math.round(path.cost));
   const departureMinute = parseClock(departureTime);
   const arrivalMinute = departureMinute + durationMinutes;
-  const lineNames = segments.map(segment => segment.line);
-  const transferStations = segments.slice(0, -1).map(segment => segment.stations[segment.stations.length - 1]);
+  const lineNames = legs.map(leg => leg.line);
+  const transferStations = legs.slice(0, -1).map(leg => leg.to);
   const title = lineNames.length ? lineNames.join(' → ') : 'MRT';
   const detail = transferStations.length
     ? `${stationSequence[0]} → ${transferStations.join(' → ')} → ${stationSequence[stationSequence.length - 1]}`
@@ -119,13 +142,18 @@ function buildRoute(path, index, departureTime = '09:00', source = 'PulseRoute n
     departure: clockText(departureMinute),
     transfers,
     walkingMinutes: 0,
+    totalWalkDistanceMetres: 0,
     confidence: Math.round(confidence),
     confidenceSource: 'PulseRoute estimate',
     reliability: confidence / 100,
     crowdLabel: 'LTA crowd data when available',
     score: Math.max(50, 100 - durationMinutes - transfers * 5),
     lines: lineNames,
-    segments,
+    busServices: [],
+    hasBus: false,
+    hasWalking: false,
+    legs,
+    segments: legs,
     stationSequence,
     origin: stationSequence[0],
     destination: stationSequence[stationSequence.length - 1],
@@ -185,16 +213,17 @@ export function routeUsesLine(route, line) {
 }
 
 export function currentLeg(route) {
-  return route?.segments?.[0] || null;
+  return (route?.legs || route?.segments || [])[0] || null;
 }
 
 export function nextTransfer(route) {
-  if (!route?.segments || route.segments.length < 2) return null;
-  const first = route.segments[0];
+  const transitLegs = (route?.legs || route?.segments || []).filter(leg => leg.mode !== 'WALK');
+  if (transitLegs.length < 2) return null;
+  const first = transitLegs[0];
   return {
-    station: first.stations[first.stations.length - 1],
-    fromLine: first.line,
-    toLine: route.segments[1].line,
-    minutes: Math.max(3, Math.round((first.stations.length - 1) * BASE_EDGE_MINUTES)),
+    station: first.to || first.stations?.at(-1),
+    fromLine: first.service || first.line,
+    toLine: transitLegs[1].service || transitLegs[1].line,
+    minutes: Math.max(3, Number(first.durationMinutes || Math.round((first.stations?.length - 1) * BASE_EDGE_MINUTES))),
   };
 }
