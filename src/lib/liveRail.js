@@ -5,6 +5,11 @@ const CROWD_LINES = ['CCL', 'CEL', 'CGL', 'DTL', 'EWL', 'NEL', 'NSL', 'TEL'];
 const levelMap = { l: 'Low', m: 'Moderate', h: 'High', na: 'Unavailable' };
 const lineAlias = { CGL: 'EWL', CEL: 'CCL' };
 const normaliseLine = line => lineAlias[line] || line;
+const loadLabels = {
+  SEA: 'Seats available',
+  SDA: 'Standing available',
+  LSD: 'Limited standing',
+};
 
 export class DataMallRequestError extends Error {
   constructor(message, code = 'connection_failed', status = null) {
@@ -72,9 +77,7 @@ function normaliseAlerts(raw) {
 
     if (Array.isArray(cluster.AffectedSegments)) {
       const sharedMessage = latestMessage(cluster.Message);
-      if (!cluster.AffectedSegments.length) {
-        return [{ Status: cluster.Status, Message: sharedMessage }];
-      }
+      if (!cluster.AffectedSegments.length) return [{ Status: cluster.Status, Message: sharedMessage }];
       return cluster.AffectedSegments.map(segment => ({
         ...segment,
         Status: segment.Status ?? cluster.Status,
@@ -118,6 +121,50 @@ export async function fetchLiveRail(accountKey) {
   };
 }
 
+function busArrivalMinutes(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return Math.max(0, Math.floor((date.getTime() - Date.now()) / 60_000));
+}
+
+function normaliseBusArrivalBus(bus) {
+  if (!bus || !bus.EstimatedArrival) return null;
+  const minutes = busArrivalMinutes(bus.EstimatedArrival);
+  return {
+    estimatedArrival: bus.EstimatedArrival,
+    minutes,
+    display: minutes == null ? 'Unavailable' : minutes < 1 ? 'Arr' : `${minutes} min`,
+    loadCode: bus.Load || '',
+    occupancy: loadLabels[bus.Load] || '',
+    monitored: String(bus.Monitored || ''),
+    feature: bus.Feature || '',
+    type: bus.Type || '',
+  };
+}
+
+export async function fetchBusArrival(busStopCode, serviceNo, accountKey) {
+  const stop = String(busStopCode || '').trim();
+  const service = String(serviceNo || '').trim();
+  if (!/^\d{5}$/.test(stop)) throw new DataMallRequestError('A valid five-digit bus stop code is required.', 'invalid_request');
+
+  const params = new URLSearchParams({ BusStopCode: stop });
+  if (service) params.set('ServiceNo', service);
+  const payload = await dataMallGet(`v3/BusArrival?${params.toString()}`, accountKey);
+  const services = Array.isArray(payload?.Services) ? payload.Services : [];
+  const selected = service ? services.find(item => String(item.ServiceNo) === service) : services[0];
+  if (!selected) return null;
+
+  return {
+    source: 'LTA DataMall — Live',
+    serviceNo: selected.ServiceNo || service,
+    operator: selected.Operator || '',
+    nextBus: normaliseBusArrivalBus(selected.NextBus),
+    nextBus2: normaliseBusArrivalBus(selected.NextBus2),
+    nextBus3: normaliseBusArrivalBus(selected.NextBus3),
+  };
+}
+
 export function disruptedAlerts(payload) {
   return (payload?.alerts || []).filter(alert => Number(alert?.Status) === 2);
 }
@@ -142,7 +189,14 @@ export function crowdRows(payload) {
 }
 
 function routeCodes(route) {
-  return new Set((route?.stationSequence || []).flatMap(name => STATION_BY_NAME[name]?.codes || []));
+  const names = new Set(route?.stationSequence || []);
+  const codes = new Set([...names].flatMap(name => STATION_BY_NAME[name]?.codes || []));
+  for (const leg of route?.legs || route?.segments || []) {
+    for (const candidate of [leg.fromStopCode, leg.toStopCode, ...(leg.intermediateStops || []).map(stop => stop.stopCode)]) {
+      if (/^(NS|EW|NE|CC|DT|TE|CG)\d{1,2}[A-Z]?$/.test(String(candidate || ''))) codes.add(candidate);
+    }
+  }
+  return codes;
 }
 
 export function crowdForRoute(payload, route) {
