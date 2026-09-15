@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowDownUp,
   ArrowRight,
+  BusFront,
   CheckCircle2,
   ChevronRight,
   Clock3,
@@ -12,6 +13,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  Footprints,
   Info,
   KeyRound,
   MapPin,
@@ -31,6 +33,7 @@ import {
 } from 'lucide-react';
 import './app-v2.css';
 import { LINE_META, MRT_STATIONS, UPCOMING_STATIONS, searchStations } from './data/mrtNetwork.js';
+import { buildSimulationReliefRoute } from './data/demoRoutes.js';
 import { buildReroute, currentLeg, planMrtRoutes } from './lib/mrtRouter.js';
 import {
   fetchOneMapTransitRoutes,
@@ -43,9 +46,11 @@ import {
   crowdRows,
   DataMallRequestError,
   disruptedAlerts,
+  fetchBusArrival,
   fetchLiveRail,
   testLtaDataMallKey,
 } from './lib/liveRail.js';
+import { chooseRerouteAlternative, rankRoutes, routeSignature } from './lib/routeScoring.js';
 import {
   clearApiKeys,
   hasLtaKey,
@@ -109,6 +114,12 @@ function fmtExpiry(value) {
   }).format(value);
 }
 
+function formatDistance(value) {
+  const metres = Number(value || 0);
+  if (!metres) return '';
+  return metres >= 1000 ? `${(metres / 1000).toFixed(metres >= 10000 ? 0 : 1)} km` : `${Math.round(metres)} m`;
+}
+
 function alertMessage(alert) {
   if (!alert) return '';
   return alert.Message || alert.message || `${alert.Line || 'Train'} service disruption${alert.Stations ? ` affecting ${alert.Stations}` : ''}.`;
@@ -127,24 +138,7 @@ function resolveStationInput(value) {
 }
 
 function sortRoutes(routes, preference, liveData) {
-  const crowdPenalty = route => {
-    const label = crowdForRoute(liveData, route).label;
-    return label === 'High' ? 14 : label === 'Moderate' ? 6 : 0;
-  };
-  return [...routes].sort((a, b) => {
-    const metric = route => {
-      if (preference === 'simple') return route.durationMinutes + route.transfers * 13;
-      if (preference === 'accessible') return route.durationMinutes + (route.walkingMinutes || 0) * 2.3 + route.transfers * 4;
-      if (preference === 'quiet') return route.durationMinutes + crowdPenalty(route) + route.transfers * 4;
-      if (preference === 'fastest') return route.durationMinutes;
-      return route.durationMinutes + route.transfers * 5 + crowdPenalty(route) * 0.45 + (route.walkingMinutes || 0) * 0.5;
-    };
-    return metric(a) - metric(b);
-  });
-}
-
-function routeSignature(route) {
-  return `${route?.lines?.join('|') || ''}:${route?.stationSequence?.join('>') || route?.detail || ''}`;
+  return rankRoutes(routes, preference, liveData);
 }
 
 function Brand() {
@@ -233,12 +227,28 @@ function StationAutocomplete({ label, value, onChange }) {
 }
 
 function SourceBadge({ route }) {
-  const isOneMap = route?.sourceKind === 'onemap' || route?.oneMapRoute;
-  return <span className={`source-badge ${isOneMap ? 'onemap' : 'model'}`}>{isOneMap ? 'OneMap' : 'PulseRoute network model'}</span>;
+  const kind = route?.sourceKind === 'simulation' || route?.simulation
+    ? 'simulation'
+    : route?.sourceKind === 'onemap' || route?.oneMapRoute
+      ? 'onemap'
+      : 'model';
+  const label = kind === 'simulation' ? 'Simulation' : kind === 'onemap' ? 'OneMap' : 'PulseRoute network model';
+  return <span className={`source-badge ${kind}`}>{label}</span>;
+}
+
+function routeModeChips(route) {
+  const legs = route?.legs || route?.segments || [];
+  const chips = [];
+  if (legs.some(leg => leg.mode === 'BUS')) chips.push(['bus', route.busServices?.length ? `Bus ${route.busServices.join(', ')}` : 'Bus']);
+  if (legs.some(leg => leg.mode === 'SUBWAY' || leg.mode === 'RAIL')) chips.push(['train', route.lines?.join(' · ') || 'MRT']);
+  if (legs.some(leg => leg.mode === 'WALK')) chips.push(['walk', 'Walking']);
+  return chips;
 }
 
 function RouteCard({ route, selected, recommended, onSelect, onStart, liveData }) {
-  const crowd = crowdForRoute(liveData, route);
+  const crowd = route.crowdInfo || crowdForRoute(liveData, route);
+  const walkDistance = formatDistance(route.totalWalkDistanceMetres);
+  const modeChips = routeModeChips(route);
   return (
     <article className={`route-card-v2 ${selected ? 'selected' : ''} ${recommended ? 'recommended' : ''}`}>
       <button type="button" className="route-card-select" onClick={onSelect}>
@@ -249,42 +259,80 @@ function RouteCard({ route, selected, recommended, onSelect, onStart, liveData }
         </div>
         <ChevronRight size={21} />
       </button>
+      <div className="route-card-secondary">
+        {modeChips.map(([kind, label]) => <span className={`mode-chip ${kind}`} key={`${kind}-${label}`}>{kind === 'bus' ? <BusFront size={12} /> : kind === 'walk' ? <Footprints size={12} /> : <TrainFront size={12} />}{label}</span>)}
+      </div>
       <div className="route-metrics-v2">
         <span><Clock3 /><b>{route.durationMinutes} min</b><small>{route.arrival ? `Arrive ${route.arrival}` : 'Estimated duration'}</small></span>
-        <span><ShieldCheck /><b>{route.confidence}%</b><small>{route.confidenceSource || 'arrival confidence'}</small></span>
-        <span><Users /><b>{crowd.label}</b><small>{crowd.source}</small></span>
+        <span><Footprints /><b>{route.walkingMinutes ? `${route.walkingMinutes} min walk` : 'No walking'}</b><small>{walkDistance || (route.walkingMinutes ? 'Walking included' : 'MRT fallback')}</small></span>
         <span><RouteIcon /><b>{route.transfers}</b><small>{route.transfers === 1 ? 'transfer' : 'transfers'}</small></span>
+        <span><Users /><b>{crowd.label}</b><small>{crowd.source}</small></span>
       </div>
+      {route.recommendationReason && <div className={`route-explanation ${route.simulation ? 'simulation' : ''}`}><Info />{route.recommendationReason}</div>}
+      {route.simulationNote && <div className="simulation-note">{route.simulationNote}</div>}
       {selected && <button type="button" className="primary-button start-button" onClick={onStart}>Start this route <ArrowRight size={17} /></button>}
     </article>
   );
 }
 
-function RouteDiagram({ route }) {
-  if (!route?.segments?.length) return null;
+function LegModeIcon({ mode }) {
+  if (mode === 'WALK') return <Footprints size={17} />;
+  if (mode === 'BUS') return <BusFront size={17} />;
+  return <TrainFront size={17} />;
+}
+
+function BusArrivalInline({ leg, credentials }) {
+  const [state, setState] = useState({ data: null, error: '', loading: false });
+  const canLoad = hasLtaKey(credentials) && leg?.mode === 'BUS' && /^\d{5}$/.test(String(leg?.fromStopCode || '')) && Boolean(leg?.service);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!canLoad) {
+      setState({ data: null, error: '', loading: false });
+      return () => { cancelled = true; };
+    }
+    setState({ data: null, error: '', loading: true });
+    fetchBusArrival(leg.fromStopCode, leg.service, credentials.ltaDataMallKey)
+      .then(data => { if (!cancelled) setState({ data, error: '', loading: false }); })
+      .catch(error => { if (!cancelled) setState({ data: null, error: error?.code === 'cors_or_network' ? 'Live bus arrival blocked by browser/network policy.' : 'Live bus arrival unavailable.', loading: false }); });
+    return () => { cancelled = true; };
+  }, [canLoad, leg?.fromStopCode, leg?.service, credentials.ltaDataMallKey]);
+
+  if (!canLoad) return null;
+  if (state.loading) return <div className="bus-live-inline unavailable"><RefreshCw className="spin" size={13} /> Checking LTA Bus Arrival…</div>;
+  if (state.data?.nextBus) return <div className="bus-live-inline"><span className="source-badge lta">LTA DataMall — Live</span><b>Next Bus {state.data.serviceNo}: {state.data.nextBus.display}</b>{state.data.nextBus.occupancy && <span>{state.data.nextBus.occupancy}</span>}</div>;
+  if (state.error) return <div className="bus-live-inline unavailable"><Info size={13} />{state.error}</div>;
+  return null;
+}
+
+function RouteDiagram({ route, credentials }) {
+  const legs = route?.legs || route?.segments || [];
+  if (!legs.length) return null;
   return (
-    <section className="route-diagram card-surface">
+    <section className="route-diagram card-surface multimodal-diagram">
       <div className="section-title"><div><span>Route detail</span><h2>{route.origin} → {route.destination}</h2></div><SourceBadge route={route} /></div>
-      <div className="route-segments">
-        {route.segments.map((segment, index) => (
-          <div className="route-segment" key={`${segment.line}-${index}`}>
-            <div className="segment-line">
-              <span style={{ background: lineColor(segment.line) }}>{segment.label || segment.line}</span>
-              <b>{LINE_META[normaliseLine(segment.line)]?.name || (segment.mode === 'BUS' ? 'Bus service' : segment.line)}</b>
-              {segment.headsign && <small>towards {segment.headsign}</small>}
+      <div className="leg-timeline">
+        {legs.map((leg, index) => {
+          const mode = String(leg.mode || 'TRANSIT').toUpperCase();
+          const isWalk = mode === 'WALK';
+          const isBus = mode === 'BUS';
+          const from = leg.from || leg.stations?.[0] || '';
+          const to = leg.to || leg.stations?.at(-1) || '';
+          const distance = formatDistance(leg.distanceMetres);
+          const lineMeta = LINE_META[normaliseLine(leg.line)];
+          const serviceTitle = isWalk ? 'Walk' : isBus ? (leg.service ? `Bus ${leg.service}` : 'Bus') : (lineMeta?.name || leg.label || leg.line || 'Train');
+          const iconStyle = !isWalk && !isBus ? { background: lineColor(leg.line) } : undefined;
+          return (
+            <div className="route-leg-row" key={`${mode}-${leg.service || leg.line}-${index}`}>
+              <div className={`leg-icon ${isWalk ? 'walk' : isBus ? 'bus' : 'train'}`} style={iconStyle}><LegModeIcon mode={mode} /></div>
+              <div className="leg-service"><b>{serviceTitle}</b>{leg.headsign && <small>towards {leg.headsign}</small>}{!isWalk && !isBus && leg.line && <small>{leg.line}</small>}</div>
+              <div className="leg-path"><b>{from || 'Start'} → {to || 'Next stop'}</b><div className="leg-meta">{leg.durationMinutes != null && <span><Clock3 size={11} />{leg.durationMinutes} min</span>}{distance && <span>{distance}</span>}{leg.stopCount != null && leg.stopCount > 0 && <span>{leg.stopCount} stop{leg.stopCount === 1 ? '' : 's'}</span>}{(leg.departure || leg.arrival) && <span>{leg.departure || '—'} → {leg.arrival || '—'}</span>}</div></div>
+              {isBus && <BusArrivalInline leg={leg} credentials={credentials} />}
             </div>
-            <div className="station-strip">
-              {segment.stations.map((station, stationIndex) => (
-                <React.Fragment key={`${station}-${stationIndex}`}>
-                  {stationIndex > 0 && <span className="station-connector" style={{ background: lineColor(segment.line) }} />}
-                  <span className="station-node"><i style={{ borderColor: lineColor(segment.line) }} /><b>{station}</b></span>
-                </React.Fragment>
-              ))}
-              {segment.stopCount > 1 && <span className="intermediate-count">{segment.stopCount} stops</span>}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
+      {route.simulationNote && <div className="simulation-note">{route.simulationNote}</div>}
     </section>
   );
 }
@@ -298,7 +346,7 @@ function ExternalDataNotice({ credentials, navigate, compact = false }) {
       <KeyRound size={19} />
       <div>
         <b>Optional official data connections</b>
-        <p>PulseRoute always works with its local MRT network model. Add a OneMap Access Token for OneMap routing and an LTA DataMall Account Key for live rail alerts/crowding.</p>
+        <p>PulseRoute always works with its local MRT network model. Add a OneMap Access Token for multimodal public-transport routes and an LTA DataMall Account Key for live rail data and optional bus arrivals.</p>
         <button type="button" className="text-button" onClick={() => navigate('settings')}>Open Settings →</button>
       </div>
     </div>
@@ -355,7 +403,7 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
     setSelectedId(localRoutes[0].id);
 
     if (!hasOneMapToken(credentials)) {
-      setMessage('Using the PulseRoute network model. Add a OneMap Access Token in Settings to try official OneMap public-transport routing.');
+      setMessage('Using PulseRoute’s MRT-only network fallback. Add a OneMap Access Token in Settings to request multimodal public-transport routes with bus and walking legs.');
       return;
     }
 
@@ -371,9 +419,9 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
         const ordered = sortRoutes(oneMapRoutes, preference, liveState.data);
         setRoutes(ordered);
         setSelectedId(ordered[0].id);
-        setMessage(`Using ${ordered.length} route${ordered.length === 1 ? '' : 's'} returned by OneMap. LTA live disruption/crowding data is applied separately when available.`);
+        setMessage(`Using ${ordered.length} multimodal route${ordered.length === 1 ? '' : 's'} returned by OneMap. Walking and bus legs are shown exactly when returned; LTA live data is applied separately when reachable.`);
       } else {
-        setMessage('OneMap returned no public-transport itinerary for that departure time. PulseRoute is showing its local MRT network fallback.');
+        setMessage('OneMap returned no public-transport itinerary for that departure time. PulseRoute is showing its local MRT-only network fallback.');
       }
     } catch (routeError) {
       const reason = routeError?.code === 'expired_token'
@@ -396,9 +444,9 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
   return (
     <main className="page-shell">
       <PageHeading
-        eyebrow="Commuter companion"
-        title="Plan any MRT journey"
-        copy={`Search across ${MRT_STATIONS.length} operational Singapore MRT stations. OneMap is used when a valid token and direct browser access are available; PulseRoute's complete MRT graph remains the fallback.`}
+        eyebrow="Multimodal commuter companion"
+        title="Plan a resilient journey"
+        copy={`Choose from ${MRT_STATIONS.length} operational MRT stations. OneMap provides multimodal public-transport itineraries with bus and walking legs when available; PulseRoute's local MRT network remains the offline fallback.`}
       />
       <section className="planner-layout">
         <div className="planner-main">
@@ -415,6 +463,7 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
             </div>
             {error && <div className="inline-message error"><AlertTriangle size={16} />{error}</div>}
             {message && <div className="inline-message info"><Info size={16} />{message}</div>}
+            <div className="demand-spread-note"><Users />PulseRoute recommends alternatives designed to spread demand across viable routes. In Balanced mode, near-equivalent options can be diversified per browser session; this is a hackathon prototype, not a claim of whole-network optimisation.</div>
           </section>
 
           <div className="results-heading"><div><span>{orderedRoutes.length} route{orderedRoutes.length === 1 ? '' : 's'}</span><h2>Best options for this journey</h2></div><small>{liveState.data ? `LTA live · refreshed ${fmtFetchedAt(liveState.data.fetchedAt)}` : 'Live LTA data unavailable'}</small></div>
@@ -431,12 +480,12 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
               />
             ))}
           </div>
-          <RouteDiagram route={selected} />
+          <RouteDiagram route={selected} credentials={credentials} />
         </div>
         <aside className="planner-side">
-          <section className="side-info-card"><div className="card-icon"><Zap /></div><h3>What PulseRoute adds</h3><p>OneMap can provide an official public-transport itinerary. LTA DataMall can provide train service alerts and station crowd-density signals. PulseRoute combines whatever official data is reachable with its own always-available MRT network model and journey monitor.</p></section>
+          <section className="side-info-card"><div className="card-icon"><Zap /></div><h3>What PulseRoute adds</h3><p>OneMap supplies multimodal public-transport itineraries when reachable. LTA DataMall can add train disruption, station crowding and bus arrival signals. PulseRoute scores the available options by time, walking, transfers, disruption exposure, crowding and your selected preference instead of blindly choosing the same fastest route for everyone.</p></section>
           <ExternalDataNotice credentials={credentials} navigate={navigate} compact />
-          <section className="side-info-card"><div className="card-icon"><TrainFront /></div><h3>Network coverage</h3><p>The fallback router covers currently operational MRT stations on NSL, EWL/Changi branch, NEL, CCL including CCL6, DTL and TEL through Bayshore.</p><small>Future stations are not routed until an opening is confirmed.</small></section>
+          <section className="side-info-card"><div className="card-icon"><TrainFront /></div><h3>Fallback coverage</h3><p>If OneMap is unavailable, the fallback router covers currently operational MRT stations on NSL, EWL/Changi branch, NEL, CCL including CCL6, DTL and TEL through Bayshore.</p><small>The fallback is MRT-only; it does not invent bus routes or walking geometry.</small></section>
         </aside>
       </section>
     </main>
@@ -489,15 +538,18 @@ function LivePage({ liveState, refreshLive, credentials, navigate }) {
 }
 
 function journeyTransfer(route) {
-  if (!route?.segments || route.segments.length < 2) return null;
-  const first = route.segments[0];
-  const station = first.stations[first.stations.length - 1];
-  const minutes = first.durationSeconds
-    ? Math.max(3, Math.round(first.durationSeconds / 60))
-    : first.stopCount
-      ? Math.max(3, Math.round(first.stopCount * 2.1))
-      : Math.max(3, Math.round((first.stations.length - 1) * 2.35));
-  return { station, fromLine: first.line, toLine: route.segments[1].line, minutes };
+  const legs = route?.legs || route?.segments || [];
+  const transitLegs = legs.filter(leg => leg.mode !== 'WALK');
+  if (transitLegs.length < 2) return null;
+  const firstTransit = transitLegs[0];
+  const firstTransitIndex = legs.indexOf(firstTransit);
+  const minutes = Math.max(1, Math.round(legs.slice(0, firstTransitIndex + 1).reduce((sum, leg) => sum + Number(leg.durationMinutes || 0), 0)));
+  return {
+    station: firstTransit.to || firstTransit.stations?.at(-1),
+    fromLine: firstTransit.service ? `Bus ${firstTransit.service}` : firstTransit.line,
+    toLine: transitLegs[1].service ? `Bus ${transitLegs[1].service}` : transitLegs[1].line,
+    minutes,
+  };
 }
 
 function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition, setDemoCondition, navigate, credentials }) {
@@ -531,7 +583,8 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
     const departure = activeJourney.targetDeparture || singaporeClock(0);
     const local = buildReroute(activeJourney.origin, activeJourney.destination, affectedLine, departure, condition.type);
     const usableLocal = local && routeSignature(local) !== routeSignature(activeJourney) ? local : null;
-    setRecommendation(usableLocal);
+    const simulationRelief = !condition.live ? buildSimulationReliefRoute(activeJourney, affectedLine, departure) : null;
+    setRecommendation(simulationRelief || usableLocal);
 
     if (!hasOneMapToken(credentials)) return () => { cancelled = true; };
     setRerouteLoading(true);
@@ -542,17 +595,18 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
       token: credentials.oneMapToken,
     }).then(routes => {
       if (cancelled || !routes.length) return;
-      const different = routes.filter(route => routeSignature(route) !== routeSignature(activeJourney));
-      const preferred = condition.type === 'disruption'
-        ? different.find(route => !route.lines?.includes(affectedLine)) || different[0]
-        : different[0];
+      const preferred = chooseRerouteAlternative(routes, activeJourney, {
+        affectedLine,
+        conditionType: condition.type,
+        liveData: liveState.data,
+      });
       if (preferred) setRecommendation(preferred);
     }).catch(() => {
-      // The local reroute remains visible. Credential/API errors are surfaced in Settings/Plan a Trip.
+      // Local/simulation rerouting remains available. API errors stay separate from simulated data.
     }).finally(() => { if (!cancelled) setRerouteLoading(false); });
 
     return () => { cancelled = true; };
-  }, [activeJourney, conditionKey, credentials.oneMapToken]);
+  }, [activeJourney, conditionKey, credentials.oneMapToken, liveState.data]);
 
   if (!activeJourney) {
     return (
@@ -565,7 +619,8 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
 
   const actionable = condition && conditionKey !== dismissedKey;
   const oldCrowd = condition?.type === 'crowding' ? 'High' : liveCrowd.label;
-  const newCrowd = recommendation ? crowdForRoute(liveState.data, recommendation).label : 'Unknown';
+  const recommendationCrowd = recommendation ? crowdForRoute(liveState.data, recommendation) : { label: 'Unknown' };
+  const newCrowd = recommendationCrowd.label !== 'Unknown' ? recommendationCrowd.label : recommendation?.crowdLabel || (condition?.type === 'crowding' ? 'Lower expected' : 'Unknown');
   const extraMinutes = recommendation ? recommendation.durationMinutes - activeJourney.durationMinutes : 0;
   const currentConfidence = condition ? Math.max(58, activeJourney.confidence - (condition.type === 'disruption' ? 24 : 12)) : activeJourney.confidence;
   const newConfidence = recommendation?.confidence || currentConfidence;
@@ -581,12 +636,24 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
     setDismissedKey('');
   };
 
+  const loadMultimodalDemo = () => {
+    const departure = singaporeClock(0);
+    const route = planMrtRoutes('Bugis', 'Paya Lebar', { departureTime: departure })[0];
+    if (route) setActiveJourney({ ...route, targetDeparture: departure, startedAt: new Date().toISOString() });
+    setDemoCondition({ type: 'normal', id: `normal-${Date.now()}` });
+    setDismissedKey('');
+  };
+
+  const firstLegFrom = firstLeg?.from || firstLeg?.stations?.[0] || activeJourney.origin;
+  const firstLegTo = firstLeg?.to || firstLeg?.stations?.at(-1) || activeJourney.destination;
+  const firstLegName = firstLeg?.mode === 'BUS' ? `Bus ${firstLeg.service || ''}`.trim() : firstLeg?.mode === 'WALK' ? 'Walk' : firstLeg?.label || firstLeg?.line || 'MRT journey';
+
   return (
     <main className="page-shell">
       <PageHeading
         eyebrow="Journey monitor"
         title="My Journey"
-        copy="PulseRoute continuously compares your chosen journey with reachable LTA network conditions and can recommend a better route when conditions change."
+        copy="PulseRoute monitors the route you chose, then compares meaningfully different rail, bus and walking alternatives when conditions change."
         action={<button type="button" className="secondary-button" onClick={() => setActiveJourney(null)}><X size={16} /> End journey</button>}
       />
       <section className={`journey-status ${condition ? 'changed' : 'on-track'}`}>
@@ -596,37 +663,40 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
       </section>
 
       <section className="journey-metrics card-surface">
-        <div><span>Current leg</span><b>{firstLeg ? `${firstLeg.label || firstLeg.line}` : 'MRT journey'}</b><small>{firstLeg ? `${firstLeg.stations[0]} → ${firstLeg.stations[firstLeg.stations.length - 1]}` : activeJourney.detail}</small></div>
-        <div><span>Next transfer</span><b>{transfer ? transfer.station : 'No transfer'}</b><small>{transfer ? `${transfer.fromLine} → ${transfer.toLine} in about ${transfer.minutes} min` : 'Stay on the current service'}</small></div>
+        <div><span>Current leg</span><b>{firstLegName}</b><small>{firstLegFrom} → {firstLegTo}</small></div>
+        <div><span>Next transfer</span><b>{transfer ? transfer.station : 'No transfer'}</b><small>{transfer ? `${transfer.fromLine} → ${transfer.toLine} in about ${transfer.minutes} min` : 'Stay with the current itinerary'}</small></div>
         <div><span>ETA</span><b>{activeJourney.arrival || `${activeJourney.durationMinutes} min`}</b><small>{activeJourney.durationMinutes} min journey</small></div>
         <div><span>Arrival confidence</span><b>{currentConfidence}%</b><small>{activeJourney.confidenceSource || (condition ? 'recalculated after change' : 'PulseRoute estimate')}</small></div>
         <div><span>Crowding</span><b>{condition?.type === 'crowding' ? 'High' : liveCrowd.label}</b><small>{condition?.type === 'crowding' ? 'Simulation' : liveCrowd.source}</small></div>
       </section>
 
-      <section className="upcoming-card card-surface"><Navigation /><div><span>Up next</span><h3>{transfer ? `Transfer at ${transfer.station} in about ${transfer.minutes} min` : `Continue on ${firstLeg?.label || firstLeg?.line || 'your current service'}`}</h3><p>{transfer ? `Change from ${transfer.fromLine} to ${transfer.toLine}. PulseRoute will keep checking conditions before the interchange.` : `Stay on board towards ${activeJourney.destination}.`}</p></div></section>
+      <section className="upcoming-card card-surface"><Navigation /><div><span>Up next</span><h3>{transfer ? `Transfer at ${transfer.station} in about ${transfer.minutes} min` : `${firstLeg?.mode === 'WALK' ? 'Walk towards' : 'Continue towards'} ${firstLegTo}`}</h3><p>{transfer ? `Change from ${transfer.fromLine} to ${transfer.toLine}. PulseRoute will keep checking conditions before the interchange.` : 'PulseRoute will keep checking the current itinerary as conditions change.'}</p></div></section>
 
       {actionable && (
         <section className="reroute-panel">
-          <div className="reroute-heading"><div><span><Sparkles size={14} /> Proactive recommendation</span><h2>{recommendation ? 'A better route is available' : 'PulseRoute is checking alternatives'}</h2><p>{condition.type === 'disruption' ? `Your current journey is exposed to a ${condition.live ? 'live LTA' : 'simulated'} service disruption.` : `Crowding increased on ${condition.line || 'your current corridor'}, so PulseRoute checked alternatives.`}</p></div>{rerouteLoading && <RefreshCw className="spin" />}</div>
+          <div className="reroute-heading"><div><span><Sparkles size={14} /> Proactive recommendation</span><h2>{recommendation ? 'A meaningfully different route is available' : 'PulseRoute is checking alternatives'}</h2><p>{condition.type === 'disruption' ? `Your current journey is exposed to a ${condition.live ? 'live LTA' : 'simulated'} service disruption.` : `Crowding increased on ${condition.line || 'your current corridor'}, so PulseRoute checked alternatives that can spread demand.`}</p></div>{rerouteLoading && <RefreshCw className="spin" />}</div>
           {recommendation && <>
-            <div className="reroute-route"><span className="route-change-label">Recommended</span><h3>{recommendation.shortTitle}</h3><p>{recommendation.detail}</p><SourceBadge route={recommendation} /></div>
-            <div className="tradeoff-grid">
+            <div className="reroute-route"><span className="route-change-label">Recommended alternative</span><h3>{recommendation.shortTitle}</h3><p>{recommendation.detail}</p><SourceBadge route={recommendation} />{recommendation.rerouteReason && <div className="reroute-reason"><Info />{recommendation.rerouteReason}</div>}</div>
+            <div className="tradeoff-grid walking-tradeoff">
               <div><span>New ETA</span><b>{recommendation.arrival || `${recommendation.durationMinutes} min`}</b></div>
               <div><span>Travel-time change</span><b className={extraMinutes <= 0 ? 'positive' : ''}>{extraMinutes > 0 ? `+${extraMinutes}` : extraMinutes} min</b></div>
-              <div><span>Crowding</span><b>{oldCrowd} → {newCrowd === 'Unknown' ? (condition.type === 'crowding' ? 'Lower expected' : 'Unknown') : newCrowd}</b></div>
+              <div><span>Walking</span><b>{activeJourney.walkingMinutes || 0} → {recommendation.walkingMinutes || 0} min</b></div>
+              <div><span>Crowding</span><b>{oldCrowd} → {newCrowd}</b></div>
               <div><span>On-time probability</span><b>{currentConfidence}% → {newConfidence}%</b></div>
             </div>
+            {recommendation.simulationNote && <div className="simulation-note">{recommendation.simulationNote}</div>}
             <div className="reroute-actions"><button type="button" className="primary-button" onClick={switchRoute}>Switch route <ArrowRight size={17} /></button><button type="button" className="secondary-button" onClick={() => setDismissedKey(conditionKey)}>Keep current route</button></div>
           </>}
         </section>
       )}
 
       {condition && !actionable && <div className="kept-route"><Info />You chose to keep the current route. PulseRoute is still monitoring it and will surface a new recommendation if conditions change again.</div>}
-      <RouteDiagram route={activeJourney} />
+      <RouteDiagram route={activeJourney} credentials={credentials} />
 
       <section className="demo-controls card-surface">
-        <div><span>Hackathon demo controls</span><h2>Normal journey → condition change → proactive reroute</h2><p>These controls are simulation only and never masquerade as OneMap or LTA data. A reachable live DataMall change triggers the same recommendation logic automatically.</p></div>
+        <div><span>Hackathon demo controls</span><h2>Normal journey → condition change → proactive multimodal reroute</h2><p>Simulation stays explicitly separate from OneMap and LTA live data. For the strongest guaranteed offline demo, load Bugis → Paya Lebar, then simulate an EWL disruption to reveal the clearly labelled Bus 7 + walking relief scenario.</p></div>
         <div className="demo-buttons">
+          <button type="button" onClick={loadMultimodalDemo}><BusFront /> Load multimodal demo</button>
           <button type="button" onClick={() => { setDemoCondition({ type: 'normal', id: `normal-${Date.now()}` }); setDismissedKey(''); }}><CheckCircle2 /> Restore normal</button>
           <button type="button" onClick={() => { setDemoCondition({ type: 'crowding', line: activeJourney.lines?.[0], text: `Crowding on ${activeJourney.lines?.[0] || 'your current line'} has increased sharply.`, id: `crowd-${Date.now()}` }); setDismissedKey(''); }}><Users /> Simulate crowding</button>
           <button type="button" className="danger" onClick={() => { setDemoCondition({ type: 'disruption', line: activeJourney.lines?.[0], text: `A simulated disruption has started on ${activeJourney.lines?.[0] || 'your current line'}.`, id: `disruption-${Date.now()}` }); setDismissedKey(''); }}><AlertTriangle /> Simulate disruption</button>
@@ -688,10 +758,7 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
       setOneMapStatus({ code: 'connected', detail: expiry ? `Token works. Expires ${fmtExpiry(expiry)}.` : 'Authenticated OneMap Search request succeeded.' });
     } catch (error) {
       const code = error instanceof OneMapRequestError ? error.code : 'connection_failed';
-      setOneMapStatus({
-        code: ['expired_token', 'invalid_token'].includes(code) ? code : 'connection_failed',
-        detail: error?.message || 'OneMap connection test failed.',
-      });
+      setOneMapStatus({ code: ['expired_token', 'invalid_token'].includes(code) ? code : 'connection_failed', detail: error?.message || 'OneMap connection test failed.' });
     } finally {
       setTesting('');
     }
@@ -701,13 +768,10 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
     setTesting('lta');
     try {
       await testLtaDataMallKey(draftLta);
-      setLtaStatus({ code: 'connected', detail: 'Authenticated Train Service Alerts request succeeded.' });
+      setLtaStatus({ code: 'connected', detail: 'Authenticated Train Service Alerts request succeeded. The same Account Key is used opportunistically for Bus Arrival v3 on bus legs.' });
     } catch (error) {
       const code = error instanceof DataMallRequestError ? error.code : 'connection_failed';
-      setLtaStatus({
-        code: code === 'invalid_key' ? 'invalid_key' : 'connection_failed',
-        detail: error?.message || 'LTA DataMall connection test failed.',
-      });
+      setLtaStatus({ code: code === 'invalid_key' ? 'invalid_key' : 'connection_failed', detail: error?.message || 'LTA DataMall connection test failed.' });
     } finally {
       setTesting('');
     }
@@ -745,7 +809,7 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
 
       <section className="settings-grid">
         <article className="credential-card card-surface">
-          <div className="credential-heading"><div className="credential-icon"><MapPin /></div><div><span>SLA</span><h2>OneMap</h2><p>Used for authenticated OneMap Search and, when direct routing succeeds, OneMap public-transport itineraries.</p></div></div>
+          <div className="credential-heading"><div className="credential-icon"><MapPin /></div><div><span>SLA</span><h2>OneMap</h2><p>Used for authenticated OneMap Search and, when direct routing succeeds, multimodal public-transport itineraries with rail, bus and walking legs.</p></div></div>
           <label className="credential-field">
             <span>OneMap Access Token</span>
             <div><input type={showOneMap ? 'text' : 'password'} value={draftOneMap} onChange={event => { setDraftOneMap(event.target.value); setOneMapStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="Paste OneMap access token" autoComplete="off" /><button type="button" onClick={() => setShowOneMap(value => !value)} aria-label={showOneMap ? 'Hide OneMap token' : 'Show OneMap token'}>{showOneMap ? <EyeOff /> : <Eye />}</button></div>
@@ -757,7 +821,7 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
         </article>
 
         <article className="credential-card card-surface">
-          <div className="credential-heading"><div className="credential-icon"><Database /></div><div><span>LTA</span><h2>DataMall</h2><p>Used for Train Service Alerts and Station Crowd Density Real Time when the browser is allowed to reach DataMall directly.</p></div></div>
+          <div className="credential-heading"><div className="credential-icon"><Database /></div><div><span>LTA</span><h2>DataMall</h2><p>Used for Train Service Alerts, Station Crowd Density Real Time and optional Bus Arrival v3 data when the browser can reach DataMall directly.</p></div></div>
           <label className="credential-field">
             <span>LTA DataMall Account Key</span>
             <div><input type={showLta ? 'text' : 'password'} value={draftLta} onChange={event => { setDraftLta(event.target.value); setLtaStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="Paste DataMall Account Key" autoComplete="off" /><button type="button" onClick={() => setShowLta(value => !value)} aria-label={showLta ? 'Hide DataMall key' : 'Show DataMall key'}>{showLta ? <EyeOff /> : <Eye />}</button></div>
@@ -774,7 +838,7 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
       </section>
 
       <section className="settings-help card-surface">
-        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> route planning falls back to the PulseRoute network model. <b>LTA unavailable:</b> Live Updates clearly shows that live rail data is unavailable. <b>Neither configured:</b> route planning and the My Journey simulation remain fully demoable.</p></div></div>
+        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> route planning falls back to the PulseRoute MRT network model. <b>LTA unavailable:</b> Live Updates clearly shows that live data is unavailable and bus arrivals are omitted. <b>Neither configured:</b> route planning and the My Journey simulation remain fully demoable.</p></div></div>
         <button type="button" className="secondary-button" onClick={refreshLive} disabled={!hasLtaKey(credentials)}>Refresh LTA data</button>
       </section>
     </main>
@@ -784,14 +848,14 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
 function AboutPage({ liveState, credentials, navigate }) {
   return (
     <main className="page-shell">
-      <PageHeading eyebrow="Nebula X Hackathon 2026" title="Why PulseRoute exists" copy="A disruption-aware commuter companion that does more than calculate a route once: it monitors the journey, explains changing conditions and recommends a better path when network conditions change." />
-      <section className="about-hero card-surface"><div><span className="eyebrow">Core idea</span><h2>From static journey planning to continuous decision support.</h2><p>PulseRoute combines supported OneMap route information with LTA rail disruption/crowd signals when those services are reachable from the browser. The local MRT network model keeps the experience working even when external APIs are unavailable.</p></div><div className="architecture"><span>OneMap<br/><small>Search + supported public-transport routing</small></span><b>+</b><span>LTA DataMall<br/><small>Service alerts + crowd density</small></span><b>→</b><span className="pulse-box">PulseRoute<br/><small>Journey monitor + proactive rerouting</small></span></div></section>
+      <PageHeading eyebrow="Nebula X Hackathon 2026" title="Why PulseRoute exists" copy="A disruption-aware multimodal commuter companion: plan once, monitor continuously, then switch to a viable rail, bus or walking alternative when conditions change." />
+      <section className="about-hero card-surface"><div><span className="eyebrow">Core idea</span><h2>From fastest-route thinking to resilient alternatives.</h2><p>PulseRoute uses OneMap multimodal itineraries when available and overlays reachable LTA disruption/crowding signals. Its Balanced prototype can diversify among near-equivalent options so every commuter is not automatically sent to the same fastest path. This is a demand-spreading prototype, not a claim of full Singapore network optimisation.</p></div><div className="architecture"><span>OneMap<br/><small>Rail + bus + walking itineraries</small></span><b>+</b><span>LTA DataMall<br/><small>Rail conditions + optional bus arrivals</small></span><b>→</b><span className="pulse-box">PulseRoute<br/><small>Scoring + journey monitor + rerouting</small></span></div></section>
       <div className="about-grid">
-        <section className="card-surface"><div className="card-icon"><Search /></div><h3>All-station journey planning</h3><p>{MRT_STATIONS.length} operational MRT stations are indexed locally for fast autocomplete and typo-tolerant search. OneMap is attempted when configured; otherwise the complete MRT topology keeps routing functional.</p></section>
-        <section className="card-surface"><div className="card-icon"><Activity /></div><h3>Live rail intelligence</h3><p>LTA DataMall Train Service Alerts and Station Crowd Density Real Time are requested directly from the browser. If browser CORS/network policy blocks DataMall, PulseRoute says so instead of pretending the feed is live.</p></section>
-        <section className="card-surface"><div className="card-icon"><Navigation /></div><h3>My Journey</h3><p>The chosen route becomes an active monitored journey. Normal service shows the current leg, transfer, ETA and confidence; a disruption or crowding change can open a reroute recommendation with an explicit trade-off.</p></section>
+        <section className="card-surface"><div className="card-icon"><RouteIcon /></div><h3>Multimodal alternatives</h3><p>OneMap routes are kept as ordered legs, including WALK, BUS and SUBWAY when returned. The local fallback remains deliberately MRT-only rather than inventing bus or walking data.</p></section>
+        <section className="card-surface"><div className="card-icon"><Activity /></div><h3>Live transport signals</h3><p>LTA DataMall Train Service Alerts and Station Crowd Density are requested directly from the browser. Bus Arrival v3 is also requested for bus legs with a real bus-stop code. Browser CORS/network restrictions are surfaced rather than hidden.</p></section>
+        <section className="card-surface"><div className="card-icon"><Navigation /></div><h3>Proactive My Journey</h3><p>When a live or simulated condition changes, PulseRoute favours meaningfully different options: avoid the affected rail line first, then prefer usable bus/walk diversity, lower crowding and reasonable time/walking trade-offs.</p></section>
       </div>
-      <section className="data-transparency card-surface"><div className="section-title"><div><span>Data transparency</span><h2>What is real and what is modelled?</h2></div><Database /></div><div className="transparency-grid"><div><b>OneMap</b><p>Cards labelled “OneMap” came from a successful direct OneMap routing response.</p></div><div><b>LTA DataMall — Live</b><p>Only shown after a successful direct authenticated DataMall request. Otherwise the app says live LTA data is unavailable.</p></div><div><b>PulseRoute network model / Simulation</b><p>The local MRT fallback and My Journey demo controls are clearly labelled and never presented as official live data.</p></div></div></section>
+      <section className="data-transparency card-surface"><div className="section-title"><div><span>Data transparency</span><h2>What is real and what is modelled?</h2></div><Database /></div><div className="transparency-grid"><div><b>OneMap</b><p>Cards labelled “OneMap” came from a successful direct OneMap public-transport response. Bus and walking legs are only shown when present in that response.</p></div><div><b>LTA DataMall — Live</b><p>Only shown after a successful authenticated DataMall request, including live bus arrival/occupancy where available.</p></div><div><b>PulseRoute network model / Simulation</b><p>The MRT-only local fallback and hackathon demo routes are clearly labelled. Simulated durations are never presented as official live data.</p></div></div></section>
       <section className="future-stations card-surface"><div className="section-title"><div><span>Network accuracy</span><h2>Not treated as operational yet</h2></div><Info /></div><p>PulseRoute does not route through a future station merely because it appears on a future-system map. These are kept separate until an opening is confirmed:</p><div>{UPCOMING_STATIONS.map(station => <span key={station.code}><b>{station.code}</b> {station.name}<small>{station.note}</small></span>)}</div></section>
       <ExternalDataNotice credentials={credentials} navigate={navigate} />
       {!liveState.data && liveState.error && <div className="inline-message info"><Info />LTA status: {liveState.error}</div>}
@@ -802,7 +866,7 @@ function AboutPage({ liveState, credentials, navigate }) {
 function loadJourney() {
   try {
     const saved = JSON.parse(window.sessionStorage.getItem('pulseroute-active-journey') || 'null');
-    if (saved?.origin && saved?.destination && saved?.segments?.length) return saved;
+    if (saved?.origin && saved?.destination && (saved?.legs?.length || saved?.segments?.length)) return saved;
   } catch {
     // Use the built-in demonstration journey below.
   }
@@ -827,7 +891,7 @@ function App() {
 
   const refreshLive = useCallback(async () => {
     if (!hasLtaKey(credentials)) {
-      setLiveState({ data: null, error: 'LTA DataMall Account Key is not configured. Add it in Settings to attempt live rail data.', reason: 'not_configured', loading: false });
+      setLiveState({ data: null, error: 'LTA DataMall Account Key is not configured. Add it in Settings to attempt live transport data.', reason: 'not_configured', loading: false });
       return;
     }
 
@@ -837,12 +901,7 @@ function App() {
       setLiveState({ data, error: '', reason: '', loading: false });
     } catch (error) {
       const reason = error instanceof DataMallRequestError ? error.code : 'connection_failed';
-      setLiveState({
-        data: null,
-        error: error?.message || 'LTA DataMall could not be reached directly from this browser.',
-        reason,
-        loading: false,
-      });
+      setLiveState({ data: null, error: error?.message || 'LTA DataMall could not be reached directly from this browser.', reason, loading: false });
     }
   }, [credentials.ltaDataMallKey]);
 
