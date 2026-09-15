@@ -1,6 +1,8 @@
 import { STATION_BY_CODE, STATION_BY_NAME } from '../data/mrtNetwork.js';
 
 const levelMap = { l: 'Low', m: 'Moderate', h: 'High', na: 'Unavailable' };
+const lineAlias = { CGL: 'EWL', CEL: 'CCL' };
+const normaliseLine = line => lineAlias[line] || line;
 
 export async function fetchLiveRail() {
   const response = await fetch('/api/live-rail', { cache: 'no-store' });
@@ -19,14 +21,15 @@ export function disruptedAlerts(payload) {
 }
 
 export function affectedLines(payload) {
-  return [...new Set(disruptedAlerts(payload).map(alert => alert.Line).filter(Boolean))];
+  return [...new Set(disruptedAlerts(payload).map(alert => normaliseLine(alert.Line)).filter(Boolean))];
 }
 
 export function crowdRows(payload) {
   if (!payload?.crowd) return [];
   return Object.entries(payload.crowd).flatMap(([line, rows]) =>
     (Array.isArray(rows) ? rows : []).map(row => ({
-      line,
+      line: normaliseLine(line),
+      sourceLine: line,
       code: row.Station,
       station: STATION_BY_CODE[row.Station]?.name || row.Station,
       level: levelMap[String(row.CrowdLevel || '').toLowerCase()] || row.CrowdLevel || 'Unavailable',
@@ -52,7 +55,7 @@ export function crowdForRoute(payload, route) {
 
 export function alertAffectsRoute(alert, route) {
   if (!alert || !route) return false;
-  if (alert.Line && route.lines?.includes(alert.Line)) return true;
+  if (alert.Line && route.lines?.includes(normaliseLine(alert.Line))) return true;
   const affectedCodes = String(alert.Stations || '').split(',').map(value => value.trim()).filter(Boolean);
   const codes = routeCodes(route);
   return affectedCodes.some(code => codes.has(code));
