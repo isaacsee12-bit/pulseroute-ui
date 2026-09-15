@@ -157,7 +157,7 @@ function RouteCard({ route, recommended, selected, onSelect, onStart }) {
           <span><Gauge /> <b>{route.score}/100 fit</b><small>{route.reasons.join(' · ') || 'balanced option'}</small></span>
         </div>
       </button>
-      {recommended && <button className="start-route" type="button" onClick={onStart}>Start this route <ArrowRight size={17} /></button>}
+      {selected && <button className="start-route" type="button" onClick={onStart}>{recommended ? 'Start this route' : 'Start selected route'} <ArrowRight size={17} /></button>}
     </article>
   );
 }
@@ -215,6 +215,10 @@ function PlanPage({ profile }) {
   const getRoutes = () => {
     if (from === to) {
       setValidation('Origin and destination must be different.');
+      return;
+    }
+    if (from !== 'Tampines' || to !== 'Buona Vista') {
+      setValidation('The calibrated hackathon demo currently supports Tampines → Buona Vista. Select that pair to run the route model.');
       return;
     }
     setValidation('');
