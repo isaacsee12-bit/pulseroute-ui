@@ -25,7 +25,7 @@ import {
   Zap,
 } from 'lucide-react';
 import './app-v2.css';
-import { LINE_META, MRT_STATIONS, STATION_BY_CODE, UPCOMING_STATIONS, searchStations } from './data/mrtNetwork.js';
+import { LINE_META, MRT_STATIONS, UPCOMING_STATIONS, searchStations } from './data/mrtNetwork.js';
 import { buildReroute, currentLeg, planMrtRoutes } from './lib/mrtRouter.js';
 import { fetchGoogleTransitRoutes, singaporeArrivalIso } from './lib/googleTransit.js';
 import { alertAffectsRoute, crowdForRoute, crowdRows, disruptedAlerts, fetchLiveRail } from './lib/liveRail.js';
@@ -251,8 +251,11 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate }) {
   const [to, setTo] = useState(activeJourney?.destination || 'Buona Vista');
   const [arrival, setArrival] = useState(activeJourney?.targetArrival || defaultArrivalTime());
   const [preference, setPreference] = useState('balanced');
-  const [routes, setRoutes] = useState(() => planMrtRoutes('Tampines', 'Buona Vista', { arrivalTime: defaultArrivalTime() }));
-  const [selectedId, setSelectedId] = useState(routes[0]?.id || '');
+  const initialArrival = activeJourney?.targetArrival || defaultArrivalTime();
+  const initialFrom = activeJourney?.origin || 'Tampines';
+  const initialTo = activeJourney?.destination || 'Buona Vista';
+  const [routes, setRoutes] = useState(() => planMrtRoutes(initialFrom, initialTo, { arrivalTime: initialArrival }));
+  const [selectedId, setSelectedId] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -352,7 +355,8 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate }) {
 function LivePage({ liveState, refreshLive }) {
   const alerts = disruptedAlerts(liveState.data);
   const crowd = crowdRows(liveState.data);
-  const rankedCrowd = [...crowd].sort((a, b) => ({ High: 0, Moderate: 1, Low: 2, Unavailable: 3 }[a.level] - ({ High: 0, Moderate: 1, Low: 2, Unavailable: 3 }[b.level]));
+  const crowdOrder = { High: 0, Moderate: 1, Low: 2, Unavailable: 3 };
+  const rankedCrowd = [...crowd].sort((a, b) => (crowdOrder[a.level] ?? 4) - (crowdOrder[b.level] ?? 4));
 
   return (
     <main className="page-shell">
@@ -395,7 +399,7 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
     if (!activeJourney) return null;
     if (demoCondition?.type && demoCondition.type !== 'normal') return demoCondition;
     if (liveAlert) return { type: 'disruption', live: true, id: `lta-${liveAlert.Line}-${liveAlert.Stations || ''}-${alertMessage(liveAlert)}`, line: normaliseLine(liveAlert.Line), text: alertMessage(liveAlert) };
-    if (liveState.data && liveCrowd.label === 'High') return { type: 'crowding', live: true, id: `crowd-${activeJourney.lines?.[0]}-${liveState.data.fetchedAt}`, line: activeJourney.lines?.[0], text: 'LTA station crowd density has risen to High on your current journey.' };
+    if (liveState.data && liveCrowd.label === 'High') return { type: 'crowding', live: true, id: `crowd-${activeJourney.lines?.[0]}-high`, line: activeJourney.lines?.[0], text: 'LTA station crowd density has risen to High on your current journey.' };
     return null;
   }, [activeJourney, demoCondition, liveAlert, liveState.data, liveCrowd.label]);
 
@@ -407,6 +411,7 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
     let cancelled = false;
     if (!activeJourney || !condition) {
       setRecommendation(null);
+      setRerouteLoading(false);
       return () => { cancelled = true; };
     }
 
