@@ -1,13 +1,17 @@
-const STORAGE_KEY = 'pulseroute-api-keys';
+const STORAGE_KEY = 'pulseroute-api-credentials';
+const LEGACY_STORAGE_KEY = 'pulseroute-api-keys';
 
-const emptyKeys = { googleMapsApiKey: '', ltaDataMallKey: '' };
+const emptyKeys = {
+  oneMapToken: '',
+  ltaDataMallKey: '',
+};
 
 export function loadApiKeys() {
   if (typeof window === 'undefined') return { ...emptyKeys };
   try {
     const saved = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) || '{}');
     return {
-      googleMapsApiKey: typeof saved.googleMapsApiKey === 'string' ? saved.googleMapsApiKey : '',
+      oneMapToken: typeof saved.oneMapToken === 'string' ? saved.oneMapToken : '',
       ltaDataMallKey: typeof saved.ltaDataMallKey === 'string' ? saved.ltaDataMallKey : '',
     };
   } catch {
@@ -17,31 +21,54 @@ export function loadApiKeys() {
 
 export function saveApiKeys(keys) {
   const next = {
-    googleMapsApiKey: String(keys?.googleMapsApiKey || '').trim(),
+    oneMapToken: String(keys?.oneMapToken || '').trim(),
     ltaDataMallKey: String(keys?.ltaDataMallKey || '').trim(),
   };
+
   if (typeof window !== 'undefined') {
     window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    window.sessionStorage.removeItem(LEGACY_STORAGE_KEY);
   }
   return next;
 }
 
 export function clearApiKeys() {
-  if (typeof window !== 'undefined') window.sessionStorage.removeItem(STORAGE_KEY);
+  if (typeof window !== 'undefined') {
+    window.sessionStorage.removeItem(STORAGE_KEY);
+    window.sessionStorage.removeItem(LEGACY_STORAGE_KEY);
+  }
   return { ...emptyKeys };
 }
 
-export function apiKeyHeaders(keys = loadApiKeys()) {
-  const headers = {};
-  if (keys.googleMapsApiKey) headers['X-PulseRoute-Google-Key'] = keys.googleMapsApiKey;
-  if (keys.ltaDataMallKey) headers['X-PulseRoute-LTA-Key'] = keys.ltaDataMallKey;
-  return headers;
-}
-
-export function hasGoogleKey(keys) {
-  return Boolean(keys?.googleMapsApiKey?.trim());
+export function hasOneMapToken(keys) {
+  return Boolean(keys?.oneMapToken?.trim());
 }
 
 export function hasLtaKey(keys) {
   return Boolean(keys?.ltaDataMallKey?.trim());
+}
+
+function decodeBase64Url(value) {
+  if (typeof window === 'undefined' || !value) return null;
+  try {
+    const normalised = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalised + '='.repeat((4 - (normalised.length % 4)) % 4);
+    return JSON.parse(window.atob(padded));
+  } catch {
+    return null;
+  }
+}
+
+export function oneMapTokenExpiry(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) return null;
+  const payload = decodeBase64Url(parts[1]);
+  if (!payload?.exp || !Number.isFinite(Number(payload.exp))) return null;
+  const date = new Date(Number(payload.exp) * 1000);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function isOneMapTokenExpired(token) {
+  const expiry = oneMapTokenExpiry(token);
+  return expiry ? expiry.getTime() <= Date.now() : false;
 }
