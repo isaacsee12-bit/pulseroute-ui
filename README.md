@@ -1,123 +1,178 @@
 # PulseRoute
 
-PulseRoute is a Nebula X Hackathon 2026 prototype for disruption-aware public-transport decision support. It plans journeys across Singapore's operational MRT network, monitors the route a commuter actually starts, and can proactively recommend a different route when a disruption or crowding change makes switching worthwhile.
+PulseRoute is a Nebula X Hackathon 2026 prototype for disruption-aware Singapore public-transport decision support. It keeps a complete local MRT routing graph available at all times, and can augment the experience with government data sources when they are reachable directly from the browser.
 
-## What works
+## Architecture
 
-- **All operational MRT stations** on NSL, EWL including the Changi branch, NEL including Punggol Coast, CCL including CCL6, DTL including Hume, and TEL through Bayshore.
-- **Type-ahead station search** by station name or code, with typo-tolerant fuzzy matching.
-- **Any MRT origin/destination pair**, with up to three rail alternatives from PulseRoute's local graph.
-- **Google Maps Routes API integration** for scheduled public-transport itineraries, alternatives, buses/walking legs and timetable-aware ETAs when configured.
-- **LTA DataMall integration** for Train Service Alerts and Station Crowd Density Real Time when configured.
-- **Live Updates** page backed by LTA rather than fake live data.
-- **My Journey** page for normal-operation monitoring and proactive rerouting when conditions change.
-- **Hackathon demo controls** for normal journey → simulated crowding/disruption → proactive reroute, clearly labelled as simulation.
-- **Offline-safe fallback**: all-station MRT routing still works if Google or LTA APIs are unavailable.
+PulseRoute is intentionally a **frontend-only React + Vite application**.
 
-## Data architecture
+There is:
 
-### Google Maps Routes API
+- no Vercel requirement;
+- no serverless `/api` layer;
+- no backend;
+- no environment-variable setup;
+- no Google Maps API dependency.
 
-`api/transit-route.js` calls Google's current Routes API `computeRoutes` endpoint with `travelMode: TRANSIT`, arrival time and alternative-route support. The API key stays server-side.
+Optional credentials are entered through the in-app **Settings** page and stored in browser `sessionStorage` for the current session only.
 
-Required environment variable:
+The routing/data stack is:
 
-```text
-GOOGLE_MAPS_API_KEY=...
-```
+1. **SLA OneMap** — authenticated Search and supported public-transport routing, when direct browser requests succeed.
+2. **LTA DataMall** — Train Service Alerts and Station Crowd Density Real Time, when direct browser requests are permitted.
+3. **PulseRoute network model** — the always-available local MRT graph and hackathon-safe fallback.
 
-Create a Google Maps Platform project, enable **Routes API**, attach billing as required by Google Maps Platform, create an API key, and restrict that key to the Routes API and your server/deployment where possible.
-
-### LTA DataMall
-
-`api/live-rail.js` calls the official LTA DataMall endpoints for:
-
-- `TrainServiceAlerts`
-- `PCDRealTime` for NSL, EWL/CGL, NEL, CCL/CEL, DTL and TEL
-
-Required environment variable:
-
-```text
-LTA_DATAMALL_KEY=...
-```
-
-Register/request API access from **LTA DataMall** to receive an Account Key. The browser never receives the key. Live rail responses are cached server-side for 60 seconds so the UI can poll safely without hammering DataMall.
-
-PulseRoute deliberately uses the official LTA source instead of scraping MyTransport.SG or third-party sites such as CheckLah. MyTransport.SG surfaces LTA information; DataMall is the supported API source for programmatic access.
-
-## Network accuracy
-
-The built-in MRT topology is intended to represent stations confirmed operational as of **15 September 2026**. It includes:
-
-- Punggol Coast (NE18), opened 10 Dec 2024
-- Hume (DT4), opened 28 Feb 2025
-- CCL6: Keppel (CC30), Cantonment (CC31), Prince Edward Road (CC32), with Marina Bay CC33 and Bayfront CC34, opened 12 Jul 2026
-
-Stations that LTA still describes as future/not-yet-open are kept out of operational routing, including Xilin, Bedok South, Sungei Bedok, Mount Pleasant, Marina South, Founders' Memorial and Bukit Brown. This prevents the fallback router from inventing journeys through unopened stations.
-
-## Routing behaviour
-
-1. The local MRT graph can route between any two indexed operational MRT stations immediately.
-2. If Google Routes is configured, PulseRoute requests timetable-aware transit alternatives and replaces the fallback options when Google returns usable routes.
-3. If LTA DataMall is configured, service alerts and crowd-density readings are applied to the selected/active journey.
-4. My Journey polls LTA every minute. A major alert affecting the current line/stations, or a high-crowding condition, can trigger a proactive reroute recommendation.
-5. The commuter sees the trade-off before switching: ETA, extra travel time, crowding and arrival confidence.
-
-The local graph uses approximate inter-station/transfer durations and exists as a resilient fallback. It is **not** presented as a live timetable. Exact transit timing comes from Google when that connector is configured.
-
-## Run locally — UI/fallback routing only
+## Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Plain Vite serves the frontend but does not execute the `/api` serverless functions. All-station MRT routing and the hackathon simulation still work.
+Open the Vite URL shown in the terminal, normally:
 
-## Run locally — real Google + LTA connectors
-
-The `/api` folder is designed for Vercel serverless functions. One straightforward setup is:
-
-```bash
-npm install
-npx vercel
-npx vercel env add GOOGLE_MAPS_API_KEY
-npx vercel env add LTA_DATAMALL_KEY
-npx vercel env pull .env.local
-npx vercel dev
+```text
+http://localhost:5173
 ```
 
-Alternatively, add the same two environment variables in the Vercel project settings and use the deployed site.
-
-Never commit real keys. `.env*` files are ignored except for the safe `.env.example` template.
-
-## Hackathon demo walkthrough
-
-1. **Plan a Trip** — type any MRT station name/code, even with a small spelling error, choose an arrival time and get routes.
-2. Start a route.
-3. **My Journey** — show the green **Journey on track** state, current leg, next transfer, ETA, confidence and crowding.
-4. Click **Simulate crowding** or **Simulate disruption**.
-5. PulseRoute changes into a proactive recommendation state and shows a new route plus the trade-off.
-6. Choose **Switch route** or **Keep current route**.
-7. **Live Updates** — when the LTA key is configured, show the actual DataMall service-alert and crowd-density response.
-8. **About** — explain the data architecture, fallback behaviour and what is live versus simulated.
-
-## Production build
+Production build:
 
 ```bash
 npm run build
-npm run preview
 ```
 
-## Tech stack
+No Vercel CLI, `.env.local`, cloud function, worker, or backend is required.
 
-- React 18
-- Vite 5
-- Lucide React
-- Google Maps Routes API (optional live connector)
-- LTA DataMall (optional live connector)
-- Vercel serverless functions for secret-safe API proxying
+## Configure optional official data
 
-## Repository hygiene
+After starting PulseRoute:
 
-`node_modules`, build output, Vite cache and local environment files are intentionally ignored through `.gitignore` and should not be committed.
+1. Open **Settings**.
+2. Paste a **OneMap Access Token** into the OneMap field.
+3. Click **Save**, then **Test Connection**.
+4. Paste your **LTA DataMall Account Key** into the LTA field.
+5. Click **Save**, then **Test Connection**.
+6. Return to **Plan a Trip**.
+
+A connection is only labelled **Connected** after a real authenticated API request succeeds. Merely entering text does not mark a service connected.
+
+### OneMap
+
+Official links:
+
+- Register for OneMap API access: https://www.onemap.gov.sg/apidocs/register
+- Official authentication/token documentation: https://www.onemap.gov.sg/apidocs/authentication
+- Token endpoint documented by OneMap: https://www.onemap.gov.sg/api/auth/post/getToken
+- Search documentation: https://www.onemap.gov.sg/apidocs/search
+- Routing documentation: https://www.onemap.gov.sg/apidocs/routing
+
+OneMap authentication uses a registered email/password to generate a temporary `access_token`. **Do that outside PulseRoute. Do not enter your OneMap account password into PulseRoute.** Copy only the returned access token into Settings.
+
+OneMap documents tokens as valid for **3 days** and returning an expiry timestamp. Current OneMap tokens are JWTs; PulseRoute can read the JWT expiry locally for a warning, but a token is considered connected only after a real authenticated OneMap Search request succeeds.
+
+The OneMap Search request uses the official `Authorization` header. The access token is never placed in a URL.
+
+### OneMap public-transport routing
+
+PulseRoute resolves the selected MRT stations with OneMap Search, then attempts OneMap's public-transport routing service at:
+
+```text
+https://www.onemap.gov.sg/api/public/routingsvc/route
+```
+
+For public transport the current routing interface uses a **departure date/time**. The current documentation does not expose an "arrive by" parameter, so PulseRoute deliberately uses **Depart at** rather than fabricating arrival-time routing.
+
+When OneMap returns itineraries, route cards are labelled **OneMap** and PulseRoute parses only fields that are present in the returned itinerary, such as duration, route legs/modes, transfers, walking duration, times and geometry where supplied.
+
+If OneMap is unavailable, rejects the token, returns no public-transport itinerary, or cannot be reached directly by the browser, PulseRoute immediately keeps/uses the **PulseRoute network model** route instead.
+
+### LTA DataMall
+
+Official links:
+
+- DataMall home: https://datamall.lta.gov.sg/content/datamall/en.html
+- Request an Account Key: https://datamall.lta.gov.sg/content/datamall/en/request-for-api.html
+- Current API User Guide: https://datamall.lta.gov.sg/content/dam/datamall/datasets/LTA_DataMall_API_User_Guide.pdf
+
+Paste the issued **Account Key** into Settings. PulseRoute sends it only in the documented `AccountKey` request header.
+
+PulseRoute currently attempts these official DataMall APIs directly from the browser:
+
+- `https://datamall2.mytransport.sg/ltaodataservice/TrainServiceAlerts`
+- `https://datamall2.mytransport.sg/ltaodataservice/PCDRealTime?TrainLine=<line>`
+
+The current LTA guide documents Train Service Alerts as ad-hoc service-unavailability information and Station Crowd Density Real Time as 10-minute MRT/LRT crowdedness readings.
+
+### Important browser/CORS limitation
+
+LTA's current DataMall guide documents HTTPS GET requests with an `AccountKey` header, illustrated through Postman. It does **not** document browser CORS support. A frontend-only browser may therefore block the direct cross-origin request before JavaScript can read the response.
+
+PulseRoute does not hide this limitation and does not silently add a proxy. If the browser blocks the call, Settings/Live Updates shows a connection failure such as:
+
+> Direct DataMall access is blocked in this browser or network. PulseRoute is using its local/demo data.
+
+The rest of the product continues to work.
+
+OneMap's current Search documentation includes JavaScript `fetch` examples using the `Authorization` header, so its browser integration is attempted directly. Actual success still depends on the current OneMap service/browser policy and a valid user token; PulseRoute falls back safely if the request fails.
+
+## Credential handling
+
+This frontend-only setup is intentionally suitable for a hackathon/demo, **not for production secret storage**.
+
+PulseRoute:
+
+- stores OneMap and LTA credentials only in `sessionStorage`;
+- masks credential fields by default;
+- provides show/hide controls;
+- never writes credentials to `localStorage`;
+- never places credentials in URLs;
+- never logs credentials to the console;
+- never hard-codes or commits credentials;
+- provides per-service Clear buttons and **Clear all credentials**.
+
+Because this is a browser application, credentials entered in Settings are visible to the browser/application itself. They should not be treated as server-side secrets.
+
+## Data-source labels
+
+PulseRoute makes the source visible in the interface:
+
+| Label | Meaning |
+| --- | --- |
+| **OneMap** | Route came from a successful OneMap routing response. |
+| **LTA DataMall — Live** | Data came from a successful direct DataMall request during this session. |
+| **PulseRoute network model** | Route came from the local MRT graph. |
+| **Simulation** | Hackathon-only simulated crowding/disruption condition. |
+
+The interface never labels local fallback or simulated data as live government data.
+
+## My Journey demo
+
+The intended hackathon walkthrough is:
+
+1. Plan and start a journey.
+2. Open **My Journey** and show the normal **Journey on track** state.
+3. Show current leg, next transfer, ETA, arrival confidence and crowding.
+4. Trigger **Simulate crowding** or **Simulate disruption**.
+5. PulseRoute explains what changed and offers a proactive reroute.
+6. Compare new ETA, extra travel time, crowding and estimated on-time probability.
+7. Choose **Switch route** or **Keep current route**.
+8. Restore normal conditions and repeat as needed.
+
+The simulation controls are explicitly labelled simulation. Reachable LTA DataMall changes feed into the same journey-monitor logic automatically.
+
+## Local MRT fallback
+
+The built-in graph covers operational stations represented in `src/data/mrtNetwork.js` across NSL, EWL/Changi branch, NEL, CCL including CCL6, DTL and the operational TEL section represented by the project. Future/unopened stations are kept separate from operational routing.
+
+Autocomplete accepts station names and station codes and uses typo-tolerant matching.
+
+## Build verification
+
+The repository includes a GitHub Actions workflow that runs:
+
+```bash
+npm ci
+npm run build
+```
+
+You can perform the same production check locally with `npm run build`.
