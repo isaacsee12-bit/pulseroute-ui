@@ -19,5 +19,7 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm install
+      - name: Smoke test route logic
+        run: npm run test:smoke
       - name: Build
         run: npm run build
