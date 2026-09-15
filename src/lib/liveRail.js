@@ -1,11 +1,15 @@
 import { STATION_BY_CODE, STATION_BY_NAME } from '../data/mrtNetwork.js';
+import { apiKeyHeaders, loadApiKeys } from './apiKeys.js';
 
 const levelMap = { l: 'Low', m: 'Moderate', h: 'High', na: 'Unavailable' };
 const lineAlias = { CGL: 'EWL', CEL: 'CCL' };
 const normaliseLine = line => lineAlias[line] || line;
 
-export async function fetchLiveRail() {
-  const response = await fetch('/api/live-rail', { cache: 'no-store' });
+export async function fetchLiveRail(keys = loadApiKeys()) {
+  const response = await fetch('/api/live-rail', {
+    cache: 'no-store',
+    headers: apiKeyHeaders(keys),
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(payload.error || 'Live LTA rail data is unavailable.');
