@@ -1,0 +1,121 @@
+.voice-trip-control {
+  display: grid;
+  gap: 8px;
+  min-width: 170px;
+}
+
+.voice-trip-button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #bcd7fb;
+  border-radius: 9px;
+  padding: 0 13px;
+  background: #eef6ff;
+  color: #0966ce;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+.voice-trip-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(9, 102, 206, .12);
+}
+
+.voice-trip-button.recording {
+  border-color: #f0b7bd;
+  background: #fff1f3;
+  color: #b52338;
+}
+
+.voice-trip-button:disabled {
+  opacity: .68;
+  cursor: wait;
+}
+
+.voice-trip-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 430px;
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: #f6f9fd;
+  color: #526b8c;
+  font-size: 8.5px;
+  line-height: 1.45;
+}
+
+.voice-trip-status.recording {
+  background: #fff6f7;
+  color: #9a3343;
+}
+
+.voice-trip-status.error {
+  background: #fff3f2;
+  color: #9d3030;
+}
+
+.voice-trip-status.success {
+  background: #eff8f4;
+  color: #17664d;
+}
+
+.voice-trip-status > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.voice-trip-status > span {
+  display: grid;
+  gap: 2px;
+}
+
+.voice-trip-status b {
+  color: #173e68;
+  font-size: 9.5px;
+}
+
+.voice-trip-status small {
+  font-size: 8px;
+}
+
+.voice-pulse {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: #d62e44;
+  box-shadow: 0 0 0 0 rgba(214, 46, 68, .35);
+  animation: voice-pulse 1.25s infinite;
+}
+
+@keyframes voice-pulse {
+  70% { box-shadow: 0 0 0 8px rgba(214, 46, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(214, 46, 68, 0); }
+}
+
+.planner-actions .voice-trip-control {
+  margin-left: auto;
+}
+
+@media (max-width: 760px) {
+  .planner-actions .voice-trip-control {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .voice-trip-button {
+    width: 100%;
+  }
+
+  .voice-trip-status {
+    max-width: none;
+  }
+}
