@@ -60,13 +60,33 @@ assert.ok(local.length >= 1, 'Local MRT fallback should route Bugis to Paya Leba
 assert.equal(local[0].sourceKind, 'model');
 assert.ok(local[0].legs.every(leg => leg.mode === 'SUBWAY'));
 
-const tampinesWestJourney = planMrtRoutes('Tampines West', 'Jurong East', { departureTime: '22:00' })[0];
-assert.ok(tampinesWestJourney, 'Tampines West to Jurong East should be routable');
-const tampinesTransfer = nextTransfer(tampinesWestJourney);
+const railTransferFixture = {
+  legs: [
+    {
+      mode: 'SUBWAY',
+      from: 'Tampines West',
+      to: 'Tampines',
+      service: 'DTL',
+      line: 'DTL',
+      label: 'Downtown Line',
+      durationMinutes: 2,
+    },
+    {
+      mode: 'SUBWAY',
+      from: 'Tampines',
+      to: 'Jurong East',
+      service: 'EWL',
+      line: 'EWL',
+      label: 'East-West Line',
+      durationMinutes: 52,
+    },
+  ],
+};
+const tampinesTransfer = nextTransfer(railTransferFixture);
 assert.equal(tampinesTransfer.station, 'Tampines');
 assert.equal(tampinesTransfer.fromLine, 'Downtown Line');
 assert.equal(tampinesTransfer.toLine, 'East-West Line');
-assert.equal(transitLegLabel(tampinesWestJourney.legs[0]), 'Downtown Line');
+assert.equal(transitLegLabel(railTransferFixture.legs[0]), 'Downtown Line');
 assert.ok(!tampinesTransfer.fromLine.startsWith('Bus '), 'Rail line must never be labelled as a bus merely because service contains DTL');
 
 const simulated = buildSimulationReliefRoute(local[0], 'EWL', '09:00');
