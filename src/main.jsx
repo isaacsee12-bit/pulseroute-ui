@@ -633,7 +633,7 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
   );
 }
 
-function LivePage({ liveState, refreshLive, credentials, navigate }) {
+function LivePage({ liveState, communityState, refreshLive, credentials, navigate }) {
   const alerts = disruptedAlerts(liveState.data);
   const crowd = crowdRows(liveState.data);
   const crowdOrder = { High: 0, Moderate: 1, Low: 2, Unavailable: 3 };
@@ -674,6 +674,7 @@ function LivePage({ liveState, refreshLive, credentials, navigate }) {
           </div>
         </>
       )}
+      <CommunityCrowdPanel communityState={communityState} navigate={navigate} />
     </main>
   );
 }
@@ -693,20 +694,31 @@ function journeyTransfer(route) {
   };
 }
 
-function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition, setDemoCondition, navigate, credentials }) {
+function JourneyPage({ activeJourney, setActiveJourney, liveState, communityState, submitCommunityReport, demoCondition, setDemoCondition, navigate, credentials }) {
   const [dismissedKey, setDismissedKey] = useState('');
   const [recommendation, setRecommendation] = useState(null);
   const [rerouteLoading, setRerouteLoading] = useState(false);
   const liveAlert = activeJourney ? disruptedAlerts(liveState.data).find(alert => alertAffectsRoute(alert, activeJourney)) : null;
-  const liveCrowd = activeJourney ? crowdForRoute(liveState.data, activeJourney) : { label: 'Unknown', source: 'Live LTA data unavailable' };
+  const liveCrowd = activeJourney ? crowdIntelligenceForRoute(liveState.data, communityState, activeJourney) : { label: 'Unknown', source: 'Crowd data unavailable' };
 
   const condition = useMemo(() => {
     if (!activeJourney) return null;
     if (demoCondition?.type && demoCondition.type !== 'normal') return demoCondition;
     if (liveAlert) return { type: 'disruption', live: true, id: `lta-${liveAlert.Line}-${liveAlert.Stations || ''}-${alertMessage(liveAlert)}`, line: normaliseLine(liveAlert.Line), text: alertMessage(liveAlert) };
-    if (liveState.data && liveCrowd.label === 'High') return { type: 'crowding', live: true, id: `crowd-${activeJourney.lines?.[0]}-high`, line: activeJourney.lines?.[0], text: 'LTA DataMall reports High station crowd density on your current journey.' };
+    if ((liveState.data || communityState?.aggregates?.length) && liveCrowd.label === 'High') {
+      const communityDriven = liveCrowd.community?.routeLevel === 'High' && liveCrowd.community.reportCount >= 3;
+      return {
+        type: 'crowding',
+        live: true,
+        id: `crowd-${activeJourney.lines?.[0]}-high-${liveCrowd.community?.lastReportedAt || ''}`,
+        line: activeJourney.lines?.[0],
+        text: communityDriven
+          ? `Recent community reports indicate very crowded conditions around ${liveCrowd.community.station || 'your route'}.`
+          : 'Current crowd intelligence indicates high crowding on your journey.',
+      };
+    }
     return null;
-  }, [activeJourney, demoCondition, liveAlert, liveState.data, liveCrowd.label]);
+  }, [activeJourney, demoCondition, liveAlert, liveState.data, liveCrowd.label, liveCrowd.community?.lastReportedAt, communityState?.aggregates?.length]);
 
   const conditionKey = condition?.id || '';
   const firstLeg = currentLeg(activeJourney);
@@ -723,7 +735,14 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
     const affectedLine = normaliseLine(condition.line || activeJourney.lines?.[0]);
     const departure = activeJourney.targetDeparture || singaporeClock(0);
     const local = buildReroute(activeJourney.origin, activeJourney.destination, affectedLine, departure, condition.type);
-    const usableLocal = local && routeSignature(local) !== routeSignature(activeJourney) ? local : null;
+    const usableLocal = local && routeSignature(local) !== routeSignature(activeJourney)
+      ? chooseRerouteAlternative([local], activeJourney, {
+          affectedLine,
+          conditionType: condition.type,
+          liveData: liveState.data,
+          communityCrowd: communityState,
+        }) || local
+      : null;
     const simulationRelief = !condition.live ? buildSimulationReliefRoute(activeJourney, affectedLine, departure) : null;
     setRecommendation(simulationRelief || usableLocal);
 
@@ -740,6 +759,7 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
         affectedLine,
         conditionType: condition.type,
         liveData: liveState.data,
+        communityCrowd: communityState,
       });
       if (preferred) setRecommendation(preferred);
     }).catch(() => {
@@ -747,7 +767,7 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
     }).finally(() => { if (!cancelled) setRerouteLoading(false); });
 
     return () => { cancelled = true; };
-  }, [activeJourney, conditionKey, credentials.oneMapToken, liveState.data]);
+  }, [activeJourney, conditionKey, credentials.oneMapToken, liveState.data, communityState]);
 
   if (!activeJourney) {
     return (
@@ -760,7 +780,7 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
 
   const actionable = condition && conditionKey !== dismissedKey;
   const oldCrowd = condition?.type === 'crowding' ? 'High' : liveCrowd.label;
-  const recommendationCrowd = recommendation ? crowdForRoute(liveState.data, recommendation) : { label: 'Unknown' };
+  const recommendationCrowd = recommendation ? crowdIntelligenceForRoute(liveState.data, communityState, recommendation) : { label: 'Unknown' };
   const newCrowd = recommendationCrowd.label !== 'Unknown' ? recommendationCrowd.label : recommendation?.crowdLabel || (condition?.type === 'crowding' ? 'Lower expected' : 'Unknown');
   const extraMinutes = recommendation ? recommendation.durationMinutes - activeJourney.durationMinutes : 0;
   const currentConfidence = condition ? Math.max(58, activeJourney.confidence - (condition.type === 'disruption' ? 24 : 12)) : activeJourney.confidence;
@@ -832,6 +852,7 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, demoCondition
       )}
 
       {condition && !actionable && <div className="kept-route"><Info />You chose to keep the current route. PulseRoute is still monitoring it and will surface a new recommendation if conditions change again.</div>}
+      <CrowdFeedback route={activeJourney} communityState={communityState} onSubmit={submitCommunityReport} />
       <RouteDiagram route={activeJourney} credentials={credentials} />
 
       <section className="demo-controls card-surface">
