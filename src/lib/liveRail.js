@@ -139,6 +139,10 @@ export function crowdBackoffMs(consecutiveRateLimits = 1) {
   return CROWD_BACKOFF_STEPS_MS[index];
 }
 
+export function mergeCrowdSnapshots(previous = {}, incoming = {}) {
+  return { ...(previous || {}), ...(incoming || {}) };
+}
+
 export async function fetchTrainServiceAlerts(accountKey) {
   const alertsRaw = await dataMallGet('TrainServiceAlerts', accountKey);
   return {
