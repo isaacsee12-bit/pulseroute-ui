@@ -6,6 +6,7 @@ const emptyKeys = {
   ltaDataMallKey: '',
   supabaseUrl: '',
   supabasePublishableKey: '',
+  geminiApiKey: '',
 };
 
 export function loadApiKeys() {
@@ -17,6 +18,7 @@ export function loadApiKeys() {
       ltaDataMallKey: typeof saved.ltaDataMallKey === 'string' ? saved.ltaDataMallKey : '',
       supabaseUrl: typeof saved.supabaseUrl === 'string' ? saved.supabaseUrl : '',
       supabasePublishableKey: typeof saved.supabasePublishableKey === 'string' ? saved.supabasePublishableKey : '',
+      geminiApiKey: typeof saved.geminiApiKey === 'string' ? saved.geminiApiKey : '',
     };
   } catch {
     return { ...emptyKeys };
@@ -29,6 +31,7 @@ export function saveApiKeys(keys) {
     ltaDataMallKey: String(keys?.ltaDataMallKey || '').trim(),
     supabaseUrl: String(keys?.supabaseUrl || '').trim(),
     supabasePublishableKey: String(keys?.supabasePublishableKey || '').trim(),
+    geminiApiKey: String(keys?.geminiApiKey || '').trim(),
   };
 
   if (typeof window !== 'undefined') {
@@ -56,6 +59,10 @@ export function hasLtaKey(keys) {
 
 export function hasCommunityStore(keys) {
   return Boolean(keys?.supabaseUrl?.trim() && keys?.supabasePublishableKey?.trim());
+}
+
+export function hasGeminiKey(keys) {
+  return Boolean(keys?.geminiApiKey?.trim());
 }
 
 function decodeBase64Url(value) {
