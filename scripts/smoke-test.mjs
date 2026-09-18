@@ -3,6 +3,8 @@ import { buildSimulationReliefRoute } from '../src/data/demoRoutes.js';
 import { planMrtRoutes } from '../src/lib/mrtRouter.js';
 import { normaliseOneMapItinerary } from '../src/lib/oneMapTransit.js';
 import { chooseRerouteAlternative, rankRoutes } from '../src/lib/routeScoring.js';
+import { aggregateCommunityReports } from '../src/lib/communityCrowd.js';
+import { crowdIntelligenceForRoute } from '../src/lib/crowdIntelligence.js';
 
 const oneMapFixture = {
   duration: 2100,
@@ -86,6 +88,36 @@ assert.equal(rankRoutes([fastCrowded, slowerQuiet], 'fastest', liveData, { disab
 assert.equal(rankRoutes([fastCrowded, slowerQuiet], 'quiet', liveData, { disableDemandSpread: true })[0].id, 'quiet');
 assert.equal(rankRoutes([fastCrowded, slowerQuiet], 'simple', liveData, { disableDemandSpread: true })[0].id, 'fast');
 
+
+const crowdNow = Date.UTC(2026, 8, 18, 12, 0, 0);
+const communityReports = ['a', 'b', 'c'].map((client, index) => ({
+  id: `report-${client}`,
+  station: 'Tampines',
+  station_code: 'EW2',
+  line: 'EWL',
+  crowd_level: 'red',
+  crowd_value: 2,
+  client_tag: `00000000-0000-4000-8000-00000000000${index + 1}`,
+  reported_at: new Date(crowdNow - index * 60_000).toISOString(),
+}));
+const communityState = {
+  configured: true,
+  mode: 'shared',
+  aggregates: aggregateCommunityReports(communityReports, crowdNow),
+};
+assert.equal(communityState.aggregates[0].label, 'Very crowded');
+assert.equal(communityState.aggregates[0].reportCount, 3);
+assert.equal(communityState.aggregates[0].confidence, 'Moderate confidence');
+
+const communityCrowd = crowdIntelligenceForRoute(null, communityState, fastCrowded);
+assert.equal(communityCrowd.label, 'High');
+assert.match(communityCrowd.source, /Community/);
+assert.equal(
+  rankRoutes([fastCrowded, slowerQuiet], 'quiet', null, { communityCrowd: communityState, disableDemandSpread: true })[0].id,
+  'quiet',
+  'Three recent red community reports should materially penalise the affected route in Less crowded mode',
+);
+
 const active = { ...fastCrowded, origin: 'Tampines', destination: 'Bugis' };
 const busAlternative = {
   id: 'bus-alt', origin: 'Tampines', destination: 'Bugis', durationMinutes: 26, transfers: 1, walkingMinutes: 4,
@@ -101,4 +133,4 @@ const reroute = chooseRerouteAlternative([railAlternative, busAlternative], acti
 assert.equal(reroute.id, 'bus-alt');
 assert.match(reroute.rerouteReason, /bus alternative/i);
 
-console.log('PulseRoute smoke tests passed: local fallback, OneMap multimodal model, preferences, and disruption rerouting.');
+console.log('PulseRoute smoke tests passed: local fallback, multimodal routes, preferences, community crowd aggregation, and disruption rerouting.');
