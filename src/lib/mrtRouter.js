@@ -216,14 +216,27 @@ export function currentLeg(route) {
   return (route?.legs || route?.segments || [])[0] || null;
 }
 
+export function transitLegLabel(leg) {
+  if (!leg) return 'Transit';
+  const mode = String(leg.mode || '').toUpperCase();
+  if (mode === 'WALK') return 'Walk';
+  if (mode === 'BUS') {
+    const service = leg.service || leg.routeShortName || leg.line || '';
+    return service ? `Bus ${service}` : 'Bus';
+  }
+
+  const line = leg.line || leg.service || '';
+  return leg.label || LINE_META[line]?.name || line || 'MRT';
+}
+
 export function nextTransfer(route) {
   const transitLegs = (route?.legs || route?.segments || []).filter(leg => leg.mode !== 'WALK');
   if (transitLegs.length < 2) return null;
   const first = transitLegs[0];
   return {
     station: first.to || first.stations?.at(-1),
-    fromLine: first.service || first.line,
-    toLine: transitLegs[1].service || transitLegs[1].line,
+    fromLine: transitLegLabel(first),
+    toLine: transitLegLabel(transitLegs[1]),
     minutes: Math.max(3, Number(first.durationMinutes || Math.round((first.stations?.length - 1) * BASE_EDGE_MINUTES))),
   };
 }
