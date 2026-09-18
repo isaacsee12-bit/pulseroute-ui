@@ -1,4 +1,4 @@
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+const GEMINI_ENDPOINT = '/gemini-proxy/v1beta/interactions';
 export const GEMINI_VOICE_MODEL = 'gemini-3.5-flash-lite';
 
 export class GeminiVoiceError extends Error {
@@ -41,7 +41,7 @@ async function callGemini(apiKey, body) {
       body: JSON.stringify(body),
     });
   } catch {
-    throw new GeminiVoiceError('Gemini could not be reached from this browser or network.', 'network_error');
+    throw new GeminiVoiceError('The local Gemini proxy could not be reached. Start PulseRoute with npm run dev (or npm run preview) and try again.', 'proxy_unavailable');
   }
 
   const payload = await response.json().catch(() => ({}));
