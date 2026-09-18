@@ -912,12 +912,15 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
   const [draftLta, setDraftLta] = useState(credentials.ltaDataMallKey);
   const [draftSupabaseUrl, setDraftSupabaseUrl] = useState(credentials.supabaseUrl);
   const [draftSupabaseKey, setDraftSupabaseKey] = useState(credentials.supabasePublishableKey);
+  const [draftGemini, setDraftGemini] = useState(credentials.geminiApiKey);
   const [showOneMap, setShowOneMap] = useState(false);
   const [showLta, setShowLta] = useState(false);
   const [showSupabase, setShowSupabase] = useState(false);
+  const [showGemini, setShowGemini] = useState(false);
   const [oneMapStatus, setOneMapStatus] = useState({ code: 'not_configured', detail: credentials.oneMapToken ? 'Saved for this browser session; test to verify.' : '' });
   const [ltaStatus, setLtaStatus] = useState({ code: 'not_configured', detail: credentials.ltaDataMallKey ? 'Saved for this browser session; test to verify.' : '' });
   const [communityStatus, setCommunityStatus] = useState({ code: 'not_configured', detail: hasCommunityStore(credentials) ? 'Saved for this browser session; test to verify.' : '' });
+  const [geminiStatus, setGeminiStatus] = useState({ code: 'not_configured', detail: hasGeminiKey(credentials) ? 'Saved for this browser session; test to verify.' : '' });
   const [testing, setTesting] = useState('');
 
   useEffect(() => {
@@ -925,6 +928,7 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
     setDraftLta(credentials.ltaDataMallKey);
     setDraftSupabaseUrl(credentials.supabaseUrl);
     setDraftSupabaseKey(credentials.supabasePublishableKey);
+    setDraftGemini(credentials.geminiApiKey);
   }, [credentials]);
 
   const persist = next => {
@@ -952,6 +956,12 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
     setCommunityStatus({ code: 'not_configured', detail: hasCommunityStore(next) ? 'Saved for this browser session; test to verify.' : '' });
   };
 
+  const saveGemini = () => {
+    const next = persist({ ...credentials, geminiApiKey: draftGemini });
+    setDraftGemini(next.geminiApiKey);
+    setGeminiStatus({ code: 'not_configured', detail: next.geminiApiKey ? 'Saved for this browser session; test to verify.' : '' });
+  };
+
   const testOneMap = async () => {
     setTesting('onemap');
     try {
@@ -974,6 +984,18 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
     } catch (error) {
       const code = error instanceof DataMallRequestError ? error.code : 'connection_failed';
       setLtaStatus({ code: code === 'invalid_key' ? 'invalid_key' : 'connection_failed', detail: error?.message || 'LTA DataMall connection test failed.' });
+    } finally {
+      setTesting('');
+    }
+  };
+
+  const testGemini = async () => {
+    setTesting('gemini');
+    try {
+      await testGeminiApiKey(draftGemini);
+      setGeminiStatus({ code: 'connected', detail: `Gemini voice parser is ready with ${GEMINI_VOICE_MODEL}.` });
+    } catch (error) {
+      setGeminiStatus({ code: 'connection_failed', detail: error?.message || 'Gemini connection test failed.' });
     } finally {
       setTesting('');
     }
@@ -1018,6 +1040,12 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
     setCommunityStatus({ code: 'not_configured', detail: '' });
   };
 
+  const clearGemini = () => {
+    setDraftGemini('');
+    persist({ ...credentials, geminiApiKey: '' });
+    setGeminiStatus({ code: 'not_configured', detail: '' });
+  };
+
   const clearAll = () => {
     const empty = clearApiKeys();
     setCredentials(empty);
@@ -1025,9 +1053,11 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
     setDraftLta('');
     setDraftSupabaseUrl('');
     setDraftSupabaseKey('');
+    setDraftGemini('');
     setOneMapStatus({ code: 'not_configured', detail: '' });
     setLtaStatus({ code: 'not_configured', detail: '' });
     setCommunityStatus({ code: 'not_configured', detail: '' });
+    setGeminiStatus({ code: 'not_configured', detail: '' });
   };
 
   const expiry = oneMapTokenExpiry(draftOneMap);
@@ -1035,9 +1065,9 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
 
   return (
     <main className="page-shell settings-page">
-      <PageHeading eyebrow="Browser session configuration" title="Settings" copy="Configure optional OneMap, LTA DataMall and shared Community Crowd connections. PulseRoute still runs with its local MRT model and local crowd-feedback demo when external services are unavailable." />
+      <PageHeading eyebrow="Browser session configuration" title="Settings" copy="Configure optional OneMap, LTA DataMall, Gemini voice planning and shared Community Crowd connections. PulseRoute still runs with its local MRT model when external services are unavailable." />
 
-      <div className="security-banner"><ShieldCheck /><div><b>Frontend-only hackathon architecture</b><p>OneMap/LTA credentials and the optional Supabase project settings are stored in <code>sessionStorage</code>. Use only a Supabase <b>publishable</b> key (or legacy anon key) in the browser — never a secret/service_role key. PulseRoute does not log credentials or commit them to Git.</p></div></div>
+      <div className="security-banner"><ShieldCheck /><div><b>Browser-session credentials</b><p>OneMap, LTA, Gemini and optional Supabase settings are stored in <code>sessionStorage</code>. PulseRoute does not hard-code or commit these credentials. For Gemini voice planning, use a Google AI Studio API key and clear it after the demo if this is a shared computer.</p></div></div>
 
       <section className="settings-grid">
         <article className="credential-card card-surface">
@@ -1064,6 +1094,17 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
         </article>
 
         <article className="credential-card card-surface">
+          <div className="credential-heading"><div className="credential-icon"><Sparkles /></div><div><span>Google AI</span><h2>Gemini Voice Planning</h2><p>Turns a short microphone request such as “Bring me from Buona Vista to Serangoon” into validated PulseRoute origin and destination fields, then plans the route automatically.</p></div></div>
+          <label className="credential-field">
+            <span>Gemini API Key</span>
+            <div><input type={showGemini ? 'text' : 'password'} value={draftGemini} onChange={event => { setDraftGemini(event.target.value); setGeminiStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="Paste Google AI Studio API key" autoComplete="off" /><button type="button" onClick={() => setShowGemini(value => !value)} aria-label={showGemini ? 'Hide Gemini key' : 'Show Gemini key'}>{showGemini ? <EyeOff /> : <Eye />}</button></div>
+          </label>
+          <CredentialStatus status={geminiStatus} />
+          <div className="credential-actions"><button type="button" className="primary-button" onClick={saveGemini}>Save</button><button type="button" className="secondary-button" onClick={testGemini} disabled={testing === 'gemini' || !draftGemini.trim()}>{testing === 'gemini' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearGemini}>Clear</button></div>
+          <p className="credential-note">Voice audio is sent directly from this browser to Gemini <code>{GEMINI_VOICE_MODEL}</code> for one-turn intent extraction. PulseRoute validates Gemini's station names against its own operational MRT dataset before routing.</p>
+        </article>
+
+        <article className="credential-card card-surface">
           <div className="credential-heading"><div className="credential-icon"><MessageCircle /></div><div><span>Community</span><h2>Shared Crowd Feedback</h2><p>Optional Supabase Data API storage lets one commuter's traffic-light crowd report inform other PulseRoute users. Without it, reports remain a clearly labelled local demo on this browser.</p></div></div>
           <label className="credential-field">
             <span>Supabase Project URL</span>
@@ -1080,12 +1121,12 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
       </section>
 
       <section className="settings-footer card-surface">
-        <div><Trash2 /><div><h3>Clear all credentials</h3><p>Remove OneMap, DataMall and Community Crowd settings from this browser tab/session immediately.</p></div></div>
+        <div><Trash2 /><div><h3>Clear all credentials</h3><p>Remove OneMap, DataMall, Gemini and Community Crowd settings from this browser tab/session immediately.</p></div></div>
         <button type="button" className="secondary-button danger-outline" onClick={clearAll}>Clear all credentials</button>
       </section>
 
       <section className="settings-help card-surface">
-        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> local MRT routing remains available. <b>LTA:</b> run PulseRoute through Vite so the local DataMall proxy is active; if LTA is unreachable, official live signals are omitted. <b>Community Crowd unavailable:</b> traffic-light reports are kept only on this browser and labelled local demo.</p></div></div>
+        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> local MRT routing remains available. <b>LTA:</b> run PulseRoute through Vite so the local DataMall proxy is active; if LTA is unreachable, official live signals are omitted. <b>Gemini unavailable:</b> typed trip planning still works normally. <b>Community Crowd unavailable:</b> traffic-light reports are kept only on this browser and labelled local demo.</p></div></div>
         <div className="credential-actions"><button type="button" className="secondary-button" onClick={refreshLive} disabled={!hasLtaKey(credentials)}>Refresh LTA data</button><button type="button" className="secondary-button" onClick={refreshCommunity}>Refresh community</button></div>
       </section>
     </main>
