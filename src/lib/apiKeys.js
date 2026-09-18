@@ -4,6 +4,8 @@ const LEGACY_STORAGE_KEY = 'pulseroute-api-keys';
 const emptyKeys = {
   oneMapToken: '',
   ltaDataMallKey: '',
+  supabaseUrl: '',
+  supabasePublishableKey: '',
 };
 
 export function loadApiKeys() {
@@ -13,6 +15,8 @@ export function loadApiKeys() {
     return {
       oneMapToken: typeof saved.oneMapToken === 'string' ? saved.oneMapToken : '',
       ltaDataMallKey: typeof saved.ltaDataMallKey === 'string' ? saved.ltaDataMallKey : '',
+      supabaseUrl: typeof saved.supabaseUrl === 'string' ? saved.supabaseUrl : '',
+      supabasePublishableKey: typeof saved.supabasePublishableKey === 'string' ? saved.supabasePublishableKey : '',
     };
   } catch {
     return { ...emptyKeys };
@@ -23,6 +27,8 @@ export function saveApiKeys(keys) {
   const next = {
     oneMapToken: String(keys?.oneMapToken || '').trim(),
     ltaDataMallKey: String(keys?.ltaDataMallKey || '').trim(),
+    supabaseUrl: String(keys?.supabaseUrl || '').trim(),
+    supabasePublishableKey: String(keys?.supabasePublishableKey || '').trim(),
   };
 
   if (typeof window !== 'undefined') {
@@ -46,6 +52,10 @@ export function hasOneMapToken(keys) {
 
 export function hasLtaKey(keys) {
   return Boolean(keys?.ltaDataMallKey?.trim());
+}
+
+export function hasCommunityStore(keys) {
+  return Boolean(keys?.supabaseUrl?.trim() && keys?.supabasePublishableKey?.trim());
 }
 
 function decodeBase64Url(value) {
