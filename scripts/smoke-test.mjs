@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildSimulationReliefRoute } from '../src/data/demoRoutes.js';
-import { planMrtRoutes } from '../src/lib/mrtRouter.js';
+import { nextTransfer, planMrtRoutes, transitLegLabel } from '../src/lib/mrtRouter.js';
 import { normaliseOneMapItinerary } from '../src/lib/oneMapTransit.js';
 import { chooseRerouteAlternative, rankRoutes } from '../src/lib/routeScoring.js';
 import { aggregateCommunityReports } from '../src/lib/communityCrowd.js';
@@ -59,6 +59,15 @@ const local = planMrtRoutes('Bugis', 'Paya Lebar', { departureTime: '09:00' });
 assert.ok(local.length >= 1, 'Local MRT fallback should route Bugis to Paya Lebar');
 assert.equal(local[0].sourceKind, 'model');
 assert.ok(local[0].legs.every(leg => leg.mode === 'SUBWAY'));
+
+const tampinesWestJourney = planMrtRoutes('Tampines West', 'Jurong East', { departureTime: '22:00' })[0];
+assert.ok(tampinesWestJourney, 'Tampines West to Jurong East should be routable');
+const tampinesTransfer = nextTransfer(tampinesWestJourney);
+assert.equal(tampinesTransfer.station, 'Tampines');
+assert.equal(tampinesTransfer.fromLine, 'Downtown Line');
+assert.equal(tampinesTransfer.toLine, 'East-West Line');
+assert.equal(transitLegLabel(tampinesWestJourney.legs[0]), 'Downtown Line');
+assert.ok(!tampinesTransfer.fromLine.startsWith('Bus '), 'Rail line must never be labelled as a bus merely because service contains DTL');
 
 const simulated = buildSimulationReliefRoute(local[0], 'EWL', '09:00');
 assert.ok(simulated, 'Multimodal hackathon simulation should exist for Bugis to Paya Lebar');
