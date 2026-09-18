@@ -38,7 +38,7 @@ import './voice-trip.css';
 import VoiceTripButton from './components/VoiceTripButton.jsx';
 import { LINE_META, MRT_STATIONS, STATION_BY_NAME, UPCOMING_STATIONS, searchStations } from './data/mrtNetwork.js';
 import { buildSimulationReliefRoute } from './data/demoRoutes.js';
-import { buildReroute, currentLeg, planMrtRoutes } from './lib/mrtRouter.js';
+import { buildReroute, currentLeg, planMrtRoutes, transitLegLabel } from './lib/mrtRouter.js';
 import {
   fetchOneMapTransitRoutes,
   OneMapRequestError,
@@ -712,8 +712,8 @@ function journeyTransfer(route) {
   const minutes = Math.max(1, Math.round(legs.slice(0, firstTransitIndex + 1).reduce((sum, leg) => sum + Number(leg.durationMinutes || 0), 0)));
   return {
     station: firstTransit.to || firstTransit.stations?.at(-1),
-    fromLine: firstTransit.service ? `Bus ${firstTransit.service}` : firstTransit.line,
-    toLine: transitLegs[1].service ? `Bus ${transitLegs[1].service}` : transitLegs[1].line,
+    fromLine: transitLegLabel(firstTransit),
+    toLine: transitLegLabel(transitLegs[1]),
     minutes,
   };
 }
