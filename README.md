@@ -46,7 +46,7 @@ No Vercel CLI, `.env.local`, cloud function, worker, or hosted backend is requir
 
 ## Gemini voice trip planning
 
-The **Plan a Trip** screen includes a **Plan with voice** control. PulseRoute records a short microphone request (maximum 10 seconds), sends the audio directly to Gemini, and asks only for a structured trip intent:
+The **Plan a Trip** screen includes a **Plan with voice** control. PulseRoute records a short microphone request (maximum 10 seconds), forwards the audio through the local Vite proxy to Gemini, and asks only for a structured trip intent:
 
 ```json
 {
@@ -67,7 +67,7 @@ Setup:
 5. Allow microphone access and say a request such as: “Bring me from Buona Vista to Serangoon.”
 6. Click **Stop & plan**, or wait for the 10-second auto-stop.
 
-The Gemini key is stored only in browser `sessionStorage`; it is not hard-coded or committed to this repository.
+The Gemini key is stored only in browser `sessionStorage`; it is not hard-coded or committed to this repository. The browser sends the request to the same-origin `/gemini-proxy` path, and Vite forwards it to the fixed Google Gemini API host.
 
 ## Configure optional official data
 
