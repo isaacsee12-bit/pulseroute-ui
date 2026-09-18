@@ -261,6 +261,19 @@ Community crowd data stays separate from official LTA DataMall data in the UI.
 
 When enough community reports exist, PulseRoute blends them with available LTA station crowd readings. If LTA crowd data is unavailable, sufficiently supported community reports can still influence **Balanced** and **Less crowded** route scoring. A route card shows the community colour, report count and confidence so the commuter can see why the recommendation changed.
 
+## LTA crowd-density refresh strategy
+
+PulseRoute deliberately treats Train Service Alerts and Station Crowd Density differently to avoid unnecessary DataMall quota pressure:
+
+- **Train Service Alerts:** refreshed every 60 seconds.
+- **Whole-network PCDRealTime crowd density:** refreshed approximately every 5 minutes.
+- The eight MRT line requests are sent **sequentially**, with a small gap between requests instead of a single parallel burst.
+- If DataMall reports a quota/rate-limit violation, PulseRoute stops the remaining crowd calls immediately and backs off for **10 minutes**, then **20 minutes**, then up to **30 minutes** for repeated quota failures.
+- Successful crowd rows are kept as the last known snapshot. A partial or rate-limited refresh updates only the lines that succeeded instead of clearing the panel.
+- The Live Updates page distinguishes **“temporarily rate-limited”** from **“LTA returned no crowd-density rows.”**
+
+Manual Live Updates refreshes still refresh Train Service Alerts, but they respect the crowd-density cadence/backoff window rather than forcing another PCDRealTime burst.
+
 ## Data-source labels
 
 | Label | Meaning |
