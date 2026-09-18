@@ -54,6 +54,7 @@ import {
   fetchTrainServiceAlerts,
   CROWD_REFRESH_MS,
   crowdBackoffMs,
+  mergeCrowdSnapshots,
   testLtaDataMallKey,
 } from './lib/liveRail.js';
 import { chooseRerouteAlternative, rankRoutes, routeSignature } from './lib/routeScoring.js';
@@ -1249,7 +1250,7 @@ function App() {
           alerts: [],
           crowd: {},
         };
-        const mergedCrowd = { ...(current.crowd || {}), ...(result.crowd || {}) };
+        const mergedCrowd = mergeCrowdSnapshots(current.crowd, result.crowd);
         const hasFreshCrowdLines = Object.keys(result.crowd || {}).length > 0;
         return {
           ...state,
