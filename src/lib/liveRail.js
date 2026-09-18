@@ -2,6 +2,9 @@ import { STATION_BY_CODE, STATION_BY_NAME } from '../data/mrtNetwork.js';
 
 const DATAMALL_BASE = '/lta-proxy';
 const CROWD_LINES = ['CCL', 'CEL', 'CGL', 'DTL', 'EWL', 'NEL', 'NSL', 'TEL'];
+export const CROWD_REFRESH_MS = 5 * 60 * 1000;
+export const CROWD_REQUEST_GAP_MS = 350;
+const CROWD_BACKOFF_STEPS_MS = [10, 20, 30].map(minutes => minutes * 60 * 1000);
 const levelMap = { l: 'Low', m: 'Moderate', h: 'High', na: 'Unavailable' };
 const lineAlias = { CGL: 'EWL', CEL: 'CCL' };
 const normaliseLine = line => lineAlias[line] || line;
@@ -56,17 +59,28 @@ async function dataMallGet(path, accountKey) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const code = response.status === 401 || response.status === 403
-      ? 'invalid_key'
-      : response.status === 502 || response.status === 504
-        ? 'proxy_upstream_failed'
-        : 'connection_failed';
+    const faultText = [
+      payload?.fault?.faultstring,
+      payload?.error?.message,
+      payload?.message,
+      payload?.Message,
+    ].filter(Boolean).join(' ');
+    const quotaLimited = response.status === 429 || /rate\s*limit|quota\s*(limit|violation|exceeded)/i.test(faultText);
+    const code = quotaLimited
+      ? 'rate_limited'
+      : response.status === 401 || response.status === 403
+        ? 'invalid_key'
+        : response.status === 502 || response.status === 504
+          ? 'proxy_upstream_failed'
+          : 'connection_failed';
     throw new DataMallRequestError(
-      code === 'invalid_key'
-        ? 'LTA DataMall rejected the Account Key.'
-        : code === 'proxy_upstream_failed'
-          ? 'The local proxy is running, but it could not reach LTA DataMall.'
-          : `LTA DataMall returned HTTP ${response.status}.`,
+      code === 'rate_limited'
+        ? 'LTA DataMall temporarily rate-limited the crowd-density request. PulseRoute will back off before retrying.'
+        : code === 'invalid_key'
+          ? 'LTA DataMall rejected the Account Key.'
+          : code === 'proxy_upstream_failed'
+            ? 'The local proxy is running, but it could not reach LTA DataMall.'
+            : `LTA DataMall returned HTTP ${response.status}.`,
       code,
       response.status,
     );
@@ -115,26 +129,97 @@ export async function testLtaDataMallKey(accountKey) {
   return { ok: true };
 }
 
-export async function fetchLiveRail(accountKey) {
-  const alertsRaw = await dataMallGet('TrainServiceAlerts', accountKey);
-  const alerts = normaliseAlerts(alertsRaw);
+function wait(milliseconds) {
+  if (!milliseconds) return Promise.resolve();
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
 
-  const crowdResults = await Promise.all(CROWD_LINES.map(async line => {
+export function crowdBackoffMs(consecutiveRateLimits = 1) {
+  const index = Math.max(0, Math.min(CROWD_BACKOFF_STEPS_MS.length - 1, Number(consecutiveRateLimits || 1) - 1));
+  return CROWD_BACKOFF_STEPS_MS[index];
+}
+
+export async function fetchTrainServiceAlerts(accountKey) {
+  const alertsRaw = await dataMallGet('TrainServiceAlerts', accountKey);
+  return {
+    alerts: normaliseAlerts(alertsRaw),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function fetchCrowdDensity(accountKey, { requestGapMs = CROWD_REQUEST_GAP_MS } = {}) {
+  const crowd = {};
+  const failures = [];
+  const attemptedLines = [];
+
+  for (let index = 0; index < CROWD_LINES.length; index += 1) {
+    const line = CROWD_LINES[index];
+    attemptedLines.push(line);
     try {
       const rows = await dataMallGet(`PCDRealTime?TrainLine=${encodeURIComponent(line)}`, accountKey);
-      return [line, Array.isArray(rows) ? rows : []];
+      crowd[line] = Array.isArray(rows) ? rows : [];
     } catch (error) {
-      if (error?.code === 'cors_or_network' || error?.code === 'invalid_key') throw error;
-      return [line, []];
-    }
-  }));
+      if (error?.code === 'invalid_key' || error?.code === 'proxy_unavailable') throw error;
+      failures.push({
+        line,
+        code: error?.code || 'connection_failed',
+        message: error?.message || 'Crowd-density request failed.',
+        status: error?.status ?? null,
+      });
 
+      // A quota failure applies to the account, so stop immediately instead of
+      // burning the remaining line requests in the same refresh.
+      if (error?.code === 'rate_limited' || error?.code === 'proxy_upstream_failed') break;
+    }
+
+    if (index < CROWD_LINES.length - 1) await wait(requestGapMs);
+  }
+
+  const rateLimited = failures.some(item => item.code === 'rate_limited');
+  const successfulLines = Object.keys(crowd);
+  const rowCount = successfulLines.reduce((sum, line) => sum + crowd[line].length, 0);
+  const state = rateLimited
+    ? 'rate_limited'
+    : failures.length
+      ? 'partial'
+      : rowCount
+        ? 'ok'
+        : 'empty';
+
+  return {
+    crowd,
+    fetchedAt: new Date().toISOString(),
+    successfulLines,
+    attemptedLines,
+    failures,
+    status: {
+      state,
+      rowCount,
+      successfulLineCount: successfulLines.length,
+      attemptedLineCount: attemptedLines.length,
+      failedLines: failures.map(item => item.line),
+      message: rateLimited
+        ? 'LTA crowd-density requests were temporarily rate-limited.'
+        : failures.length
+          ? 'Some LTA crowd-density line requests failed; existing readings can be retained for those lines.'
+          : rowCount
+            ? 'LTA crowd-density refresh succeeded.'
+            : 'LTA returned no crowd-density rows for this refresh.',
+    },
+  };
+}
+
+export async function fetchLiveRail(accountKey) {
+  const alertsResult = await fetchTrainServiceAlerts(accountKey);
+  const crowdResult = await fetchCrowdDensity(accountKey);
   return {
     configured: true,
     source: 'LTA DataMall — Live',
-    fetchedAt: new Date().toISOString(),
-    alerts,
-    crowd: Object.fromEntries(crowdResults),
+    fetchedAt: alertsResult.fetchedAt,
+    alerts: alertsResult.alerts,
+    crowd: crowdResult.crowd,
+    crowdFetchedAt: crowdResult.fetchedAt,
+    crowdStatus: crowdResult.status,
   };
 }
 
