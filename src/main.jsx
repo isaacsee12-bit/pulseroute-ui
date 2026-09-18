@@ -875,23 +875,32 @@ function CredentialStatus({ status }) {
     invalid_token: 'Invalid token',
     expired_token: 'Expired token',
     invalid_key: 'Invalid key',
+    invalid_config: 'Invalid configuration',
+    unsafe_key: 'Unsafe key',
+    schema_missing: 'Schema not installed',
     connection_failed: 'Connection failed',
   }[status.code] || 'Not configured';
   return <div className={`credential-status ${status.code}`}><span /> <b>{label}</b>{status.detail && <small>{status.detail}</small>}</div>;
 }
 
-function SettingsPage({ credentials, setCredentials, refreshLive }) {
+function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommunity }) {
   const [draftOneMap, setDraftOneMap] = useState(credentials.oneMapToken);
   const [draftLta, setDraftLta] = useState(credentials.ltaDataMallKey);
+  const [draftSupabaseUrl, setDraftSupabaseUrl] = useState(credentials.supabaseUrl);
+  const [draftSupabaseKey, setDraftSupabaseKey] = useState(credentials.supabasePublishableKey);
   const [showOneMap, setShowOneMap] = useState(false);
   const [showLta, setShowLta] = useState(false);
+  const [showSupabase, setShowSupabase] = useState(false);
   const [oneMapStatus, setOneMapStatus] = useState({ code: 'not_configured', detail: credentials.oneMapToken ? 'Saved for this browser session; test to verify.' : '' });
   const [ltaStatus, setLtaStatus] = useState({ code: 'not_configured', detail: credentials.ltaDataMallKey ? 'Saved for this browser session; test to verify.' : '' });
+  const [communityStatus, setCommunityStatus] = useState({ code: 'not_configured', detail: hasCommunityStore(credentials) ? 'Saved for this browser session; test to verify.' : '' });
   const [testing, setTesting] = useState('');
 
   useEffect(() => {
     setDraftOneMap(credentials.oneMapToken);
     setDraftLta(credentials.ltaDataMallKey);
+    setDraftSupabaseUrl(credentials.supabaseUrl);
+    setDraftSupabaseKey(credentials.supabasePublishableKey);
   }, [credentials]);
 
   const persist = next => {
@@ -910,6 +919,13 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
     const next = persist({ ...credentials, ltaDataMallKey: draftLta });
     setDraftLta(next.ltaDataMallKey);
     setLtaStatus({ code: 'not_configured', detail: next.ltaDataMallKey ? 'Saved for this browser session; test to verify.' : '' });
+  };
+
+  const saveCommunity = () => {
+    const next = persist({ ...credentials, supabaseUrl: draftSupabaseUrl, supabasePublishableKey: draftSupabaseKey });
+    setDraftSupabaseUrl(next.supabaseUrl);
+    setDraftSupabaseKey(next.supabasePublishableKey);
+    setCommunityStatus({ code: 'not_configured', detail: hasCommunityStore(next) ? 'Saved for this browser session; test to verify.' : '' });
   };
 
   const testOneMap = async () => {
@@ -939,6 +955,26 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
     }
   };
 
+  const testCommunity = async () => {
+    setTesting('community');
+    try {
+      const config = {
+        supabaseUrl: draftSupabaseUrl.trim(),
+        supabasePublishableKey: draftSupabaseKey.trim(),
+      };
+      await testCommunityCrowdConnection(config);
+      setCommunityStatus({ code: 'connected', detail: 'Shared crowd_reports table is reachable with the publishable key and RLS policy.' });
+    } catch (error) {
+      const code = error instanceof CommunityCrowdError ? error.code : 'connection_failed';
+      setCommunityStatus({
+        code: ['invalid_key', 'invalid_config', 'unsafe_key', 'schema_missing'].includes(code) ? code : 'connection_failed',
+        detail: error?.message || 'Community crowd connection test failed.',
+      });
+    } finally {
+      setTesting('');
+    }
+  };
+
   const clearOneMap = () => {
     setDraftOneMap('');
     persist({ ...credentials, oneMapToken: '' });
@@ -951,13 +987,23 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
     setLtaStatus({ code: 'not_configured', detail: '' });
   };
 
+  const clearCommunity = () => {
+    setDraftSupabaseUrl('');
+    setDraftSupabaseKey('');
+    persist({ ...credentials, supabaseUrl: '', supabasePublishableKey: '' });
+    setCommunityStatus({ code: 'not_configured', detail: '' });
+  };
+
   const clearAll = () => {
     const empty = clearApiKeys();
     setCredentials(empty);
     setDraftOneMap('');
     setDraftLta('');
+    setDraftSupabaseUrl('');
+    setDraftSupabaseKey('');
     setOneMapStatus({ code: 'not_configured', detail: '' });
     setLtaStatus({ code: 'not_configured', detail: '' });
+    setCommunityStatus({ code: 'not_configured', detail: '' });
   };
 
   const expiry = oneMapTokenExpiry(draftOneMap);
@@ -965,9 +1011,9 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
 
   return (
     <main className="page-shell settings-page">
-      <PageHeading eyebrow="Browser session configuration" title="Settings" copy="Enter optional government API credentials for this browser session. PulseRoute never requires credentials to run: its local MRT network model remains available at all times." />
+      <PageHeading eyebrow="Browser session configuration" title="Settings" copy="Configure optional OneMap, LTA DataMall and shared Community Crowd connections. PulseRoute still runs with its local MRT model and local crowd-feedback demo when external services are unavailable." />
 
-      <div className="security-banner"><ShieldCheck /><div><b>Frontend-only hackathon architecture</b><p>Credentials are stored only in <code>sessionStorage</code> and are sent directly from your browser to the selected API. They are visible to this browser/application and are not production secrets. PulseRoute does not log them, put them in URLs, or commit them to Git.</p></div></div>
+      <div className="security-banner"><ShieldCheck /><div><b>Frontend-only hackathon architecture</b><p>OneMap/LTA credentials and the optional Supabase project settings are stored in <code>sessionStorage</code>. Use only a Supabase <b>publishable</b> key (or legacy anon key) in the browser — never a secret/service_role key. PulseRoute does not log credentials or commit them to Git.</p></div></div>
 
       <section className="settings-grid">
         <article className="credential-card card-surface">
@@ -992,16 +1038,31 @@ function SettingsPage({ credentials, setCredentials, refreshLive }) {
           <div className="credential-actions"><button type="button" className="primary-button" onClick={saveLta}>Save</button><button type="button" className="secondary-button" onClick={testLta} disabled={testing === 'lta' || !draftLta.trim()}>{testing === 'lta' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearLta}>Clear</button></div>
           <p className="credential-note">If the browser blocks DataMall cross-origin requests, Test Connection will report a connection failure and PulseRoute will keep using local/demo data. No proxy or backend is silently introduced.</p>
         </article>
+
+        <article className="credential-card card-surface">
+          <div className="credential-heading"><div className="credential-icon"><MessageCircle /></div><div><span>Community</span><h2>Shared Crowd Feedback</h2><p>Optional Supabase Data API storage lets one commuter's traffic-light crowd report inform other PulseRoute users. Without it, reports remain a clearly labelled local demo on this browser.</p></div></div>
+          <label className="credential-field">
+            <span>Supabase Project URL</span>
+            <div><input type="url" value={draftSupabaseUrl} onChange={event => { setDraftSupabaseUrl(event.target.value); setCommunityStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="https://your-project.supabase.co" autoComplete="off" /></div>
+          </label>
+          <label className="credential-field">
+            <span>Supabase Publishable Key</span>
+            <div><input type={showSupabase ? 'text' : 'password'} value={draftSupabaseKey} onChange={event => { setDraftSupabaseKey(event.target.value); setCommunityStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="sb_publishable_... (legacy anon also supported)" autoComplete="off" /><button type="button" onClick={() => setShowSupabase(value => !value)} aria-label={showSupabase ? 'Hide Supabase key' : 'Show Supabase key'}>{showSupabase ? <EyeOff /> : <Eye />}</button></div>
+          </label>
+          <CredentialStatus status={communityStatus} />
+          <div className="credential-actions"><button type="button" className="primary-button" onClick={saveCommunity}>Save</button><button type="button" className="secondary-button" onClick={testCommunity} disabled={testing === 'community' || !draftSupabaseUrl.trim() || !draftSupabaseKey.trim()}>{testing === 'community' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearCommunity}>Clear</button></div>
+          <p className="credential-note">Run <code>supabase/crowd_reports.sql</code> once in your Supabase SQL Editor. PulseRoute rejects <code>sb_secret_</code> and legacy service_role keys because they must never be exposed in a browser.</p>
+        </article>
       </section>
 
       <section className="settings-footer card-surface">
-        <div><Trash2 /><div><h3>Clear all credentials</h3><p>Remove both credentials from this browser tab/session immediately.</p></div></div>
+        <div><Trash2 /><div><h3>Clear all credentials</h3><p>Remove OneMap, DataMall and Community Crowd settings from this browser tab/session immediately.</p></div></div>
         <button type="button" className="secondary-button danger-outline" onClick={clearAll}>Clear all credentials</button>
       </section>
 
       <section className="settings-help card-surface">
-        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> route planning falls back to the PulseRoute MRT network model. <b>LTA unavailable:</b> Live Updates clearly shows that live data is unavailable and bus arrivals are omitted. <b>Neither configured:</b> route planning and the My Journey simulation remain fully demoable.</p></div></div>
-        <button type="button" className="secondary-button" onClick={refreshLive} disabled={!hasLtaKey(credentials)}>Refresh LTA data</button>
+        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> local MRT routing remains available. <b>LTA unavailable:</b> official live signals are omitted. <b>Community Crowd unavailable:</b> traffic-light reports are kept only on this browser and labelled local demo. Shared community reports require the bundled Supabase table + RLS policies.</p></div></div>
+        <div className="credential-actions"><button type="button" className="secondary-button" onClick={refreshLive} disabled={!hasLtaKey(credentials)}>Refresh LTA data</button><button type="button" className="secondary-button" onClick={refreshCommunity}>Refresh community</button></div>
       </section>
     </main>
   );
