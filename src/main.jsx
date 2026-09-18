@@ -18,6 +18,7 @@ import {
   KeyRound,
   MapPin,
   Menu,
+  MessageCircle,
   Navigation,
   RefreshCw,
   Route as RouteIcon,
@@ -32,7 +33,8 @@ import {
   Zap,
 } from 'lucide-react';
 import './app-v2.css';
-import { LINE_META, MRT_STATIONS, UPCOMING_STATIONS, searchStations } from './data/mrtNetwork.js';
+import './community-crowd.css';
+import { LINE_META, MRT_STATIONS, STATION_BY_NAME, UPCOMING_STATIONS, searchStations } from './data/mrtNetwork.js';
 import { buildSimulationReliefRoute } from './data/demoRoutes.js';
 import { buildReroute, currentLeg, planMrtRoutes } from './lib/mrtRouter.js';
 import {
@@ -51,8 +53,18 @@ import {
   testLtaDataMallKey,
 } from './lib/liveRail.js';
 import { chooseRerouteAlternative, rankRoutes, routeSignature } from './lib/routeScoring.js';
+import { crowdIntelligenceForRoute } from './lib/crowdIntelligence.js';
+import {
+  COMMUNITY_LEVELS,
+  CommunityCrowdError,
+  communityAggregateForStation,
+  fetchCommunityCrowd,
+  submitCrowdReport,
+  testCommunityCrowdConnection,
+} from './lib/communityCrowd.js';
 import {
   clearApiKeys,
+  hasCommunityStore,
   hasLtaKey,
   hasOneMapToken,
   isOneMapTokenExpired,
@@ -120,6 +132,37 @@ function formatDistance(value) {
   return metres >= 1000 ? `${(metres / 1000).toFixed(metres >= 10000 ? 0 : 1)} km` : `${Math.round(metres)} m`;
 }
 
+const LINE_PREFIX = { NS: 'NSL', EW: 'EWL', CG: 'EWL', NE: 'NEL', CC: 'CCL', DT: 'DTL', TE: 'TEL' };
+const lineFromCode = code => LINE_PREFIX[String(code || '').slice(0, 2)] || '';
+
+function relativeTime(value) {
+  const timestamp = new Date(value || '').getTime();
+  if (!Number.isFinite(timestamp)) return '';
+  const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60_000));
+  if (minutes < 1) return 'just now';
+  if (minutes === 1) return '1 min ago';
+  return `${minutes} min ago`;
+}
+
+function feedbackStationOptions(route) {
+  const routeLines = new Set(route?.lines || []);
+  const rows = [];
+  for (const name of route?.stationSequence || []) {
+    const station = STATION_BY_NAME[name];
+    for (const code of station?.codes || []) {
+      const line = lineFromCode(code);
+      if (line && (!routeLines.size || routeLines.has(line))) rows.push({ station: name, stationCode: code, line });
+    }
+  }
+  const seen = new Set();
+  return rows.filter(row => {
+    const key = `${row.stationCode}::${row.line}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function alertMessage(alert) {
   if (!alert) return '';
   return alert.Message || alert.message || `${alert.Line || 'Train'} service disruption${alert.Stations ? ` affecting ${alert.Stations}` : ''}.`;
@@ -137,8 +180,8 @@ function resolveStationInput(value) {
   return candidate && candidate.score <= 3.36 ? candidate.name : null;
 }
 
-function sortRoutes(routes, preference, liveData) {
-  return rankRoutes(routes, preference, liveData);
+function sortRoutes(routes, preference, liveData, communityState) {
+  return rankRoutes(routes, preference, liveData, { communityCrowd: communityState });
 }
 
 function Brand() {
@@ -236,6 +279,101 @@ function SourceBadge({ route }) {
   return <span className={`source-badge ${kind}`}>{label}</span>;
 }
 
+function CommunitySourcePill({ state }) {
+  const shared = state?.mode === 'shared';
+  return <span className={`community-source-pill ${shared ? '' : 'local'}`}>{shared ? 'Community · Shared' : 'Community demo · this browser'}</span>;
+}
+
+function CrowdFeedback({ route, communityState, onSubmit }) {
+  const options = useMemo(() => feedbackStationOptions(route), [route]);
+  const [selectedKey, setSelectedKey] = useState('');
+  const [status, setStatus] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!options.length) {
+      setSelectedKey('');
+      return;
+    }
+    const stillValid = options.some(option => `${option.stationCode}::${option.line}` === selectedKey);
+    if (!stillValid) setSelectedKey(`${options[0].stationCode}::${options[0].line}`);
+  }, [options, selectedKey]);
+
+  if (!options.length) return null;
+  const selected = options.find(option => `${option.stationCode}::${option.line}` === selectedKey) || options[0];
+  const current = communityAggregateForStation(communityState, selected.stationCode, selected.line);
+
+  const report = async level => {
+    if (submitting) return;
+    setSubmitting(true);
+    setStatus(null);
+    try {
+      const result = await onSubmit({ ...selected, level });
+      setStatus({
+        warning: !result.shared,
+        text: result.shared
+          ? `Thanks — your ${COMMUNITY_LEVELS[level].label.toLowerCase()} report is now shared with other PulseRoute users.`
+          : `Saved on this browser only. ${result.warning || 'Configure Community Crowd in Settings to share reports across devices.'}`,
+      });
+    } catch (error) {
+      setStatus({
+        warning: true,
+        text: error?.code === 'rate_limited'
+          ? 'You already reported this station in the current 5-minute window.'
+          : error?.message || 'Crowd feedback could not be saved.',
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="community-crowd-card card-surface">
+      <div className="community-crowd-head">
+        <div><MessageCircle /><div><span>Community crowd feedback</span><h3>How crowded is it right now?</h3><p>Report the MRT station/line you are currently experiencing. Recent reports decay after 30 minutes and are kept separate from official LTA readings.</p></div></div>
+        <CommunitySourcePill state={communityState} />
+      </div>
+      <div className="crowd-report-location">
+        <label>Reporting location
+          <select value={selectedKey} onChange={event => setSelectedKey(event.target.value)}>
+            {options.map(option => <option key={`${option.stationCode}-${option.line}`} value={`${option.stationCode}::${option.line}`}>{option.station} · {option.stationCode} · {option.line}</option>)}
+          </select>
+        </label>
+        <div className="community-current">
+          {current ? <><b><span className={`traffic-dot ${current.level}`} />{current.label}</b><small>{current.reportCount} recent report{current.reportCount === 1 ? '' : 's'} · {current.confidence}{current.lastReportedAt ? ` · ${relativeTime(current.lastReportedAt)}` : ''}</small></> : <><b>No recent reports</b><small>Be the first to report this station.</small></>}
+        </div>
+      </div>
+      <div className="traffic-light-feedback" aria-label="Report crowd level">
+        <button type="button" disabled={submitting} onClick={() => report('green')}><span className="traffic-dot green" />Green · Empty</button>
+        <button type="button" disabled={submitting} onClick={() => report('yellow')}><span className="traffic-dot yellow" />Yellow · Slightly crowded</button>
+        <button type="button" disabled={submitting} onClick={() => report('red')}><span className="traffic-dot red" />Red · Very crowded</button>
+      </div>
+      {status && <div className={`community-feedback-status ${status.warning ? 'warning' : ''}`}>{status.text}</div>}
+    </section>
+  );
+}
+
+function CommunityCrowdPanel({ communityState, navigate }) {
+  const rows = communityState?.aggregates || [];
+  return (
+    <section className="community-live-panel card-surface">
+      <div className="section-title">
+        <div><span>Community crowd reports</span><h2>What commuters are reporting</h2></div>
+        <CommunitySourcePill state={communityState} />
+      </div>
+      {communityState?.error && <div className="inline-message info"><Info />Shared crowd service unavailable: {communityState.error}</div>}
+      {rows.length ? <div className="community-live-grid">{rows.slice(0, 12).map(row => (
+        <div className="community-live-row" key={`${row.stationCode}-${row.line}`}>
+          <span className={`traffic-dot ${row.level}`} />
+          <div><b>{row.station}</b><small>{row.stationCode} · {row.line} · {row.label}</small></div>
+          <span>{row.reportCount} report{row.reportCount === 1 ? '' : 's'}</span>
+        </div>
+      ))}</div> : <div className="healthy-message"><Info />No community crowd reports in the last 30 minutes.</div>}
+      {communityState?.mode !== 'shared' && <button type="button" className="text-button" onClick={() => navigate('settings')}>Configure shared Community Crowd →</button>}
+    </section>
+  );
+}
+
 function routeModeChips(route) {
   const legs = route?.legs || route?.segments || [];
   const chips = [];
@@ -245,8 +383,8 @@ function routeModeChips(route) {
   return chips;
 }
 
-function RouteCard({ route, selected, recommended, onSelect, onStart, liveData }) {
-  const crowd = route.crowdInfo || crowdForRoute(liveData, route);
+function RouteCard({ route, selected, recommended, onSelect, onStart, liveData, communityState }) {
+  const crowd = route.crowdInfo || crowdIntelligenceForRoute(liveData, communityState, route);
   const walkDistance = formatDistance(route.totalWalkDistanceMetres);
   const modeChips = routeModeChips(route);
   return (
@@ -268,6 +406,7 @@ function RouteCard({ route, selected, recommended, onSelect, onStart, liveData }
         <span><RouteIcon /><b>{route.transfers}</b><small>{route.transfers === 1 ? 'transfer' : 'transfers'}</small></span>
         <span><Users /><b>{crowd.label}</b><small>{crowd.source}</small></span>
       </div>
+      {crowd.community && <div className="community-route-note"><span className={`traffic-dot ${crowd.community.level}`} /><strong>{crowd.community.label}</strong><span>Community · {crowd.community.reportCount} recent report{crowd.community.reportCount === 1 ? '' : 's'} · {crowd.community.confidence}</span></div>}
       {route.recommendationReason && <div className={`route-explanation ${route.simulation ? 'simulation' : ''}`}><Info />{route.recommendationReason}</div>}
       {route.simulationNote && <div className="simulation-note">{route.simulationNote}</div>}
       {selected && <button type="button" className="primary-button start-button" onClick={onStart}>Start this route <ArrowRight size={17} /></button>}
@@ -353,7 +492,7 @@ function ExternalDataNotice({ credentials, navigate, compact = false }) {
   );
 }
 
-function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, credentials }) {
+function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, navigate, credentials }) {
   const initialDeparture = activeJourney?.targetDeparture || singaporeClock(10);
   const initialFrom = activeJourney?.origin || 'Tampines';
   const initialTo = activeJourney?.destination || 'Buona Vista';
@@ -367,7 +506,7 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  const orderedRoutes = useMemo(() => sortRoutes(routes, preference, liveState.data), [routes, preference, liveState.data]);
+  const orderedRoutes = useMemo(() => sortRoutes(routes, preference, liveState.data, communityState), [routes, preference, liveState.data, communityState]);
   const selected = orderedRoutes.find(route => route.id === selectedId) || orderedRoutes[0];
 
   useEffect(() => {
@@ -394,6 +533,7 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
       planMrtRoutes(resolvedFrom, resolvedTo, { departureTime: departure }),
       preference,
       liveState.data,
+      communityState,
     );
     if (!localRoutes.length) {
       setError('No MRT route could be found between those stations.');
@@ -416,7 +556,7 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
         token: credentials.oneMapToken,
       });
       if (oneMapRoutes.length) {
-        const ordered = sortRoutes(oneMapRoutes, preference, liveState.data);
+        const ordered = sortRoutes(oneMapRoutes, preference, liveState.data, communityState);
         setRoutes(ordered);
         setSelectedId(ordered[0].id);
         setMessage(`Using ${ordered.length} multimodal route${ordered.length === 1 ? '' : 's'} returned by OneMap. Walking and bus legs are shown exactly when returned; LTA live data is applied separately when reachable.`);
@@ -477,6 +617,7 @@ function PlanPage({ liveState, activeJourney, setActiveJourney, navigate, creden
                 onSelect={() => setSelectedId(route.id)}
                 onStart={() => startRoute(route)}
                 liveData={liveState.data}
+                communityState={communityState}
               />
             ))}
           </div>
