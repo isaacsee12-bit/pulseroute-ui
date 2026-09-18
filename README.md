@@ -6,22 +6,22 @@ PulseRoute does **not** claim to optimise the whole Singapore transport network.
 
 ## Architecture
 
-PulseRoute is a **frontend-only React + Vite application**.
+PulseRoute is a React + Vite application with no cloud backend requirement.
 
 There is:
 
 - no Vercel requirement;
 - no serverless `/api` layer;
-- no backend;
 - no environment-variable setup;
-- no Google Maps API dependency.
+- no Google Maps API dependency;
+- a **local Vite development/preview proxy** for LTA DataMall, because DataMall's browser CORS policy blocks the direct frontend request.
 
 Optional credentials are entered through **Settings** and stored in browser `sessionStorage` for the current session only.
 
 The data/routing stack is:
 
 1. **SLA OneMap** — authenticated Search and public-transport routing. Successful itineraries can contain ordered `WALK`, `BUS` and `SUBWAY` legs.
-2. **LTA DataMall** — Train Service Alerts, Station Crowd Density Real Time, and optional Bus Arrival v3 for bus legs when direct browser access succeeds.
+2. **LTA DataMall** — Train Service Alerts, Station Crowd Density Real Time, and optional Bus Arrival v3, forwarded through the local Vite proxy so browser CORS does not block the hackathon demo.
 3. **PulseRoute network model** — the always-available, MRT-only local routing fallback.
 4. **Community Crowd** — optional shared traffic-light crowd reports using Supabase Data REST with Row Level Security.
 5. **Simulation** — clearly labelled hackathon scenarios used only to demonstrate proactive rerouting when external APIs are unavailable.
@@ -41,7 +41,7 @@ Production check:
 npm run build
 ```
 
-No Vercel CLI, `.env.local`, cloud function, worker, or backend is required.
+No Vercel CLI, `.env.local`, cloud function, worker, or hosted backend is required. For live LTA data, run the app with Vite (`npm run dev` or `npm run preview`) so the local DataMall proxy is available.
 
 ## Configure optional official data
 
@@ -164,16 +164,30 @@ Bus Arrival occupancy codes are displayed using the official meanings:
 
 Next-bus time is rounded down to whole minutes; under one minute is displayed as **Arr**, matching LTA's frontend guidance.
 
-### Browser/CORS limitation
+### Local Vite proxy for browser CORS
 
-DataMall's current official guide documents HTTPS GET requests with an `AccountKey` header and illustrates them through Postman. It does **not** document browser CORS support. A frontend-only browser may therefore reject the cross-origin preflight.
+A direct browser request to DataMall can be blocked by CORS because the request uses the custom `AccountKey` header. The Account Key itself can still be valid, as verified from PowerShell/Postman.
 
-PulseRoute does not hide this and does not add a proxy. If direct DataMall access is blocked:
+PulseRoute now solves this **locally** through Vite:
 
-- Live Updates reports the connection failure;
-- LTA crowd/disruption data is omitted;
-- Bus Arrival/occupancy is omitted;
-- OneMap/local routing and the hackathon simulation keep working.
+```text
+Browser (localhost:5173)
+        ↓ same-origin /lta-proxy
+Vite local proxy
+        ↓ server-side HTTPS
+LTA DataMall
+```
+
+The browser still reads the Account Key from PulseRoute Settings/sessionStorage. It sends that key only to the same-origin local Vite proxy, which forwards it to the fixed DataMall host.
+
+This means:
+
+- `npm run dev` → live DataMall requests can work without browser CORS;
+- `npm run preview` → the same local proxy is configured;
+- `npm run build` → still produces a normal static Vite build;
+- opening/deploying only the static files **without a compatible proxy** cannot provide DataMall live data.
+
+No LTA key is hard-coded, committed, or placed in an environment variable.
 
 ## Community crowd feedback
 
@@ -215,7 +229,7 @@ Those local-only reports are not shared with other devices.
 
 Community crowd data stays separate from official LTA DataMall data in the UI.
 
-- **LTA DataMall — Live** means an official LTA reading.
+- **LTA DataMall — Live** means an official LTA reading successfully returned through the local Vite proxy.
 - **Community** means recent commuter reports stored in the configured shared crowd service.
 - **Community demo — this browser** means local-only fallback reports.
 
