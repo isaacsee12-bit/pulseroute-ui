@@ -23,7 +23,8 @@ The data/routing stack is:
 1. **SLA OneMap** — authenticated Search and public-transport routing. Successful itineraries can contain ordered `WALK`, `BUS` and `SUBWAY` legs.
 2. **LTA DataMall** — Train Service Alerts, Station Crowd Density Real Time, and optional Bus Arrival v3 for bus legs when direct browser access succeeds.
 3. **PulseRoute network model** — the always-available, MRT-only local routing fallback.
-4. **Simulation** — clearly labelled hackathon scenarios used only to demonstrate proactive rerouting when external APIs are unavailable.
+4. **Community Crowd** — optional shared traffic-light crowd reports using Supabase Data REST with Row Level Security.
+5. **Simulation** — clearly labelled hackathon scenarios used only to demonstrate proactive rerouting when external APIs are unavailable.
 
 ## Run locally
 
@@ -174,6 +175,52 @@ PulseRoute does not hide this and does not add a proxy. If direct DataMall acces
 - Bus Arrival/occupancy is omitted;
 - OneMap/local routing and the hackathon simulation keep working.
 
+## Community crowd feedback
+
+PulseRoute now supports commuter-submitted MRT crowd feedback using traffic-light levels:
+
+- 🟢 **Green — Empty**
+- 🟡 **Yellow — Slightly crowded**
+- 🔴 **Red — Very crowded**
+
+Reports are time-sensitive. The browser weights reports most strongly in the first 5 minutes, then progressively down-weights them, and ignores them after 30 minutes. Only the latest recent report from each anonymous browser identifier counts for a station/line aggregate.
+
+For route scoring, one or two reports are shown as useful context but are treated as **limited reports**. At least three recent unique-browser reports are required before community crowding can materially affect PulseRoute route scoring. Eight or more recent reports are labelled high confidence.
+
+### Shared feedback with Supabase
+
+The app remains frontend-only. Shared crowd reports use Supabase's browser-accessible Data REST API; no PulseRoute backend or serverless function is required.
+
+1. Create a Supabase project: https://supabase.com/dashboard
+2. Open the project's SQL Editor.
+3. Run the bundled `supabase/crowd_reports.sql`.
+4. In the Supabase project **Connect** dialog, copy the **Project URL** and **Publishable Key**.
+5. In PulseRoute, open **Settings → Shared Crowd Feedback**.
+6. Paste the Project URL and Publishable Key.
+7. Click **Save**, then **Test Connection**.
+
+Current Supabase guidance recommends a **publishable key** for browser applications. Legacy `anon` keys are also accepted by PulseRoute. **Never enter a Supabase secret key or legacy service_role key**; PulseRoute rejects those obvious key types in the browser.
+
+The SQL schema enables Row Level Security and grants the public client only `SELECT` and `INSERT` access to `crowd_reports`. It also enforces one report per anonymous client tag / station / line / five-minute bucket. This is appropriate hackathon-grade abuse resistance, not production anti-fraud.
+
+### Local demo fallback
+
+If Supabase is not configured or unreachable, crowd feedback still works on the current browser using local storage and is clearly labelled:
+
+**Community demo — this browser**
+
+Those local-only reports are not shared with other devices.
+
+### How community reports affect recommendations
+
+Community crowd data stays separate from official LTA DataMall data in the UI.
+
+- **LTA DataMall — Live** means an official LTA reading.
+- **Community** means recent commuter reports stored in the configured shared crowd service.
+- **Community demo — this browser** means local-only fallback reports.
+
+When enough community reports exist, PulseRoute blends them with available LTA station crowd readings. If LTA crowd data is unavailable, sufficiently supported community reports can still influence **Balanced** and **Less crowded** route scoring. A route card shows the community colour, report count and confidence so the commuter can see why the recommendation changed.
+
 ## Data-source labels
 
 | Label | Meaning |
@@ -213,6 +260,7 @@ The repository's GitHub Actions workflow runs:
 
 ```bash
 npm install
+npm run test:smoke
 npm run build
 ```
 
