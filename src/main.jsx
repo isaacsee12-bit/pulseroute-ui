@@ -1101,7 +1101,7 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
           </label>
           <CredentialStatus status={geminiStatus} />
           <div className="credential-actions"><button type="button" className="primary-button" onClick={saveGemini}>Save</button><button type="button" className="secondary-button" onClick={testGemini} disabled={testing === 'gemini' || !draftGemini.trim()}>{testing === 'gemini' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearGemini}>Clear</button></div>
-          <p className="credential-note">Voice audio is sent directly from this browser to Gemini <code>{GEMINI_VOICE_MODEL}</code> for one-turn intent extraction. PulseRoute validates Gemini's station names against its own operational MRT dataset before routing.</p>
+          <p className="credential-note">Voice audio is forwarded through PulseRoute's local Vite proxy to Gemini <code>{GEMINI_VOICE_MODEL}</code> for one-turn intent extraction. The API key remains in browser sessionStorage and is forwarded only to Google's Gemini API. PulseRoute validates Gemini's station names against its own operational MRT dataset before routing.</p>
         </article>
 
         <article className="credential-card card-surface">
