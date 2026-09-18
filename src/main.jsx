@@ -432,7 +432,7 @@ function BusArrivalInline({ leg, credentials }) {
     setState({ data: null, error: '', loading: true });
     fetchBusArrival(leg.fromStopCode, leg.service, credentials.ltaDataMallKey)
       .then(data => { if (!cancelled) setState({ data, error: '', loading: false }); })
-      .catch(error => { if (!cancelled) setState({ data: null, error: error?.code === 'cors_or_network' ? 'Live bus arrival blocked by browser/network policy.' : 'Live bus arrival unavailable.', loading: false }); });
+      .catch(error => { if (!cancelled) setState({ data: null, error: error?.code === 'proxy_unavailable' ? 'Start PulseRoute with npm run dev so the local DataMall proxy is available.' : 'Live bus arrival unavailable.', loading: false }); });
     return () => { cancelled = true; };
   }, [canLoad, leg?.fromStopCode, leg?.service, credentials.ltaDataMallKey]);
 
@@ -643,7 +643,7 @@ function LivePage({ liveState, communityState, refreshLive, credentials, navigat
       <PageHeading
         eyebrow="Network intelligence"
         title="Live Updates"
-        copy="PulseRoute attempts direct browser requests to the official LTA DataMall Train Service Alerts and Station Crowd Density APIs using the Account Key saved for this browser session."
+        copy="PulseRoute uses your session-only LTA Account Key through the local Vite DataMall proxy. This avoids DataMall browser CORS while keeping setup local to your laptop."
         action={<button type="button" className="secondary-button" onClick={refreshLive} disabled={liveState.loading || !hasLtaKey(credentials)}><RefreshCw className={liveState.loading ? 'spin' : ''} size={16} /> Refresh</button>}
       />
       {!liveState.data ? (
@@ -651,7 +651,7 @@ function LivePage({ liveState, communityState, refreshLive, credentials, navigat
           <CloudOff />
           <h2>LTA live data is unavailable</h2>
           <p>{liveState.error || 'Add an LTA DataMall Account Key in Settings, then test the connection.'}</p>
-          {liveState.reason === 'cors_or_network' && <div className="cors-warning"><AlertTriangle size={17} />Direct DataMall access is blocked in this browser or network. PulseRoute is continuing with local/demo data; no backend proxy has been introduced.</div>}
+          {['proxy_unavailable', 'proxy_upstream_failed'].includes(liveState.reason) && <div className="cors-warning"><AlertTriangle size={17} />{liveState.reason === 'proxy_unavailable' ? 'The local DataMall proxy is not active. Start PulseRoute with npm run dev (or npm run preview).' : 'The local proxy is running but could not reach LTA DataMall.'}</div>}
           <button type="button" className="secondary-button" onClick={() => navigate('settings')}><SettingsIcon size={16} /> Open Settings</button>
         </section>
       ) : (
@@ -1035,7 +1035,7 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
           </label>
           <CredentialStatus status={ltaStatus} />
           <div className="credential-actions"><button type="button" className="primary-button" onClick={saveLta}>Save</button><button type="button" className="secondary-button" onClick={testLta} disabled={testing === 'lta' || !draftLta.trim()}>{testing === 'lta' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearLta}>Clear</button></div>
-          <p className="credential-note">If the browser blocks DataMall cross-origin requests, Test Connection will report a connection failure and PulseRoute will keep using local/demo data. No proxy or backend is silently introduced.</p>
+          <p className="credential-note">PulseRoute sends DataMall requests through the local Vite proxy configured in this repository, which avoids browser CORS during <code>npm run dev</code> and <code>npm run preview</code>. Your Account Key still stays in browser sessionStorage and is forwarded only to LTA DataMall.</p>
         </article>
 
         <article className="credential-card card-surface">
@@ -1060,7 +1060,7 @@ function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommuni
       </section>
 
       <section className="settings-help card-surface">
-        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> local MRT routing remains available. <b>LTA unavailable:</b> official live signals are omitted. <b>Community Crowd unavailable:</b> traffic-light reports are kept only on this browser and labelled local demo. Shared community reports require the bundled Supabase table + RLS policies.</p></div></div>
+        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> local MRT routing remains available. <b>LTA:</b> run PulseRoute through Vite so the local DataMall proxy is active; if LTA is unreachable, official live signals are omitted. <b>Community Crowd unavailable:</b> traffic-light reports are kept only on this browser and labelled local demo.</p></div></div>
         <div className="credential-actions"><button type="button" className="secondary-button" onClick={refreshLive} disabled={!hasLtaKey(credentials)}>Refresh LTA data</button><button type="button" className="secondary-button" onClick={refreshCommunity}>Refresh community</button></div>
       </section>
     </main>
@@ -1074,7 +1074,7 @@ function AboutPage({ liveState, credentials, navigate }) {
       <section className="about-hero card-surface"><div><span className="eyebrow">Core idea</span><h2>From fastest-route thinking to resilient alternatives.</h2><p>PulseRoute uses OneMap multimodal itineraries when available, overlays reachable LTA disruption/crowding signals, and can blend recent commuter crowd feedback. Its Balanced prototype can diversify among near-equivalent options so every commuter is not automatically sent to the same fastest path. This is a demand-spreading prototype, not a claim of full Singapore network optimisation.</p></div><div className="architecture"><span>OneMap<br/><small>Rail + bus + walking itineraries</small></span><b>+</b><span>LTA + Community<br/><small>Official + recent crowd signals</small></span><b>→</b><span className="pulse-box">PulseRoute<br/><small>Scoring + journey monitor + rerouting</small></span></div></section>
       <div className="about-grid">
         <section className="card-surface"><div className="card-icon"><RouteIcon /></div><h3>Multimodal alternatives</h3><p>OneMap routes are kept as ordered legs, including WALK, BUS and SUBWAY when returned. The local fallback remains deliberately MRT-only rather than inventing bus or walking data.</p></section>
-        <section className="card-surface"><div className="card-icon"><Activity /></div><h3>Live transport signals</h3><p>LTA DataMall Train Service Alerts and Station Crowd Density are requested directly from the browser. Bus Arrival v3 is also requested for bus legs with a real bus-stop code. Browser CORS/network restrictions are surfaced rather than hidden.</p></section>
+        <section className="card-surface"><div className="card-icon"><Activity /></div><h3>Live transport signals</h3><p>LTA DataMall Train Service Alerts, Station Crowd Density and eligible Bus Arrival v3 requests are forwarded through PulseRoute's local Vite proxy. This keeps the hackathon demo local while avoiding DataMall browser CORS.</p></section>
         <section className="card-surface"><div className="card-icon"><Navigation /></div><h3>Proactive My Journey</h3><p>When a live, community-reported or simulated condition changes, PulseRoute favours meaningfully different options: avoid the affected rail line first, then prefer usable bus/walk diversity, lower crowding and reasonable time/walking trade-offs.</p></section>
       </div>
       <section className="data-transparency card-surface"><div className="section-title"><div><span>Data transparency</span><h2>What is real and what is modelled?</h2></div><Database /></div><div className="transparency-grid"><div><b>OneMap</b><p>Cards labelled “OneMap” came from a successful direct OneMap public-transport response. Bus and walking legs are only shown when present in that response.</p></div><div><b>LTA DataMall — Live</b><p>Only shown after a successful authenticated DataMall request, including live bus arrival/occupancy where available.</p></div><div><b>Community</b><p>Traffic-light reports are recent anonymous commuter submissions. At least three unique recent reports are required before community data can materially affect route scoring.</p></div><div><b>PulseRoute network model / Simulation</b><p>The MRT-only local fallback and hackathon demo routes are clearly labelled. Simulated durations are never presented as official live data.</p></div></div></section>
