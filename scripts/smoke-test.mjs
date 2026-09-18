@@ -4,6 +4,7 @@ import { nextTransfer, planMrtRoutes, transitLegLabel } from '../src/lib/mrtRout
 import { normaliseOneMapItinerary } from '../src/lib/oneMapTransit.js';
 import { chooseRerouteAlternative, rankRoutes } from '../src/lib/routeScoring.js';
 import { aggregateCommunityReports } from '../src/lib/communityCrowd.js';
+import { crowdBackoffMs, fetchCrowdDensity, mergeCrowdSnapshots } from '../src/lib/liveRail.js';
 import { crowdIntelligenceForRoute } from '../src/lib/crowdIntelligence.js';
 
 const oneMapFixture = {
@@ -88,6 +89,51 @@ assert.equal(tampinesTransfer.fromLine, 'Downtown Line');
 assert.equal(tampinesTransfer.toLine, 'East-West Line');
 assert.equal(transitLegLabel(railTransferFixture.legs[0]), 'Downtown Line');
 assert.ok(!tampinesTransfer.fromLine.startsWith('Bus '), 'Rail line must never be labelled as a bus merely because service contains DTL');
+
+assert.equal(crowdBackoffMs(1), 10 * 60 * 1000);
+assert.equal(crowdBackoffMs(2), 20 * 60 * 1000);
+assert.equal(crowdBackoffMs(99), 30 * 60 * 1000);
+assert.deepEqual(
+  mergeCrowdSnapshots(
+    { EWL: [{ Station: 'EW2', CrowdLevel: 'm' }], DTL: [{ Station: 'DT31', CrowdLevel: 'l' }] },
+    { EWL: [{ Station: 'EW2', CrowdLevel: 'h' }] },
+  ),
+  { EWL: [{ Station: 'EW2', CrowdLevel: 'h' }], DTL: [{ Station: 'DT31', CrowdLevel: 'l' }] },
+  'Partial crowd refreshes must preserve older successful lines',
+);
+
+const originalFetch = global.fetch;
+try {
+  let quotaCalls = 0;
+  global.fetch = async () => {
+    quotaCalls += 1;
+    return new Response(
+      JSON.stringify({ fault: { faultstring: 'Rate limit quota violation. Quota limit exceeded.' } }),
+      { status: 429, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+  const quotaResult = await fetchCrowdDensity('test-key', { requestGapMs: 0 });
+  assert.equal(quotaResult.status.state, 'rate_limited');
+  assert.equal(quotaCalls, 1, 'Crowd refresh must stop immediately after a quota violation');
+
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let sequentialCalls = 0;
+  global.fetch = async () => {
+    sequentialCalls += 1;
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 1));
+    inFlight -= 1;
+    return new Response(JSON.stringify({ value: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const sequentialResult = await fetchCrowdDensity('test-key', { requestGapMs: 0 });
+  assert.equal(sequentialCalls, 8);
+  assert.equal(maxInFlight, 1, 'PCDRealTime line calls must be sequential, not parallel');
+  assert.equal(sequentialResult.status.state, 'empty');
+} finally {
+  global.fetch = originalFetch;
+}
 
 const simulated = buildSimulationReliefRoute(local[0], 'EWL', '09:00');
 assert.ok(simulated, 'Multimodal hackathon simulation should exist for Bugis to Paya Lebar');
