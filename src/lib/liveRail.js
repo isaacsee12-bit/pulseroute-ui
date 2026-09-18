@@ -1,6 +1,6 @@
 import { STATION_BY_CODE, STATION_BY_NAME } from '../data/mrtNetwork.js';
 
-const DATAMALL_BASE = 'https://datamall2.mytransport.sg/ltaodataservice';
+const DATAMALL_BASE = '/lta-proxy';
 const CROWD_LINES = ['CCL', 'CEL', 'CGL', 'DTL', 'EWL', 'NEL', 'NSL', 'TEL'];
 const levelMap = { l: 'Low', m: 'Moderate', h: 'High', na: 'Unavailable' };
 const lineAlias = { CGL: 'EWL', CEL: 'CCL' };
@@ -40,16 +40,33 @@ async function dataMallGet(path, accountKey) {
     });
   } catch {
     throw new DataMallRequestError(
-      'Direct DataMall access is blocked in this browser or network. PulseRoute is using its local/demo data.',
-      'cors_or_network',
+      'The local DataMall proxy could not be reached. Start PulseRoute with npm run dev (or npm run preview) and try again.',
+      'proxy_unavailable',
+    );
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (response.status === 404 || (!contentType.includes('json') && response.ok)) {
+    throw new DataMallRequestError(
+      'The local DataMall proxy is not active. Run PulseRoute through Vite with npm run dev (or npm run preview).',
+      'proxy_unavailable',
+      response.status,
     );
   }
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const code = response.status === 401 || response.status === 403 ? 'invalid_key' : 'connection_failed';
+    const code = response.status === 401 || response.status === 403
+      ? 'invalid_key'
+      : response.status === 502 || response.status === 504
+        ? 'proxy_upstream_failed'
+        : 'connection_failed';
     throw new DataMallRequestError(
-      code === 'invalid_key' ? 'LTA DataMall rejected the Account Key.' : `LTA DataMall returned HTTP ${response.status}.`,
+      code === 'invalid_key'
+        ? 'LTA DataMall rejected the Account Key.'
+        : code === 'proxy_upstream_failed'
+          ? 'The local proxy is running, but it could not reach LTA DataMall.'
+          : `LTA DataMall returned HTTP ${response.status}.`,
       code,
       response.status,
     );
