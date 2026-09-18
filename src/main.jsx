@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import {
   Activity,
@@ -50,7 +50,10 @@ import {
   DataMallRequestError,
   disruptedAlerts,
   fetchBusArrival,
-  fetchLiveRail,
+  fetchCrowdDensity,
+  fetchTrainServiceAlerts,
+  CROWD_REFRESH_MS,
+  crowdBackoffMs,
   testLtaDataMallKey,
 } from './lib/liveRail.js';
 import { chooseRerouteAlternative, rankRoutes, routeSignature } from './lib/routeScoring.js';
@@ -660,8 +663,11 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
 function LivePage({ liveState, communityState, refreshLive, credentials, navigate }) {
   const alerts = disruptedAlerts(liveState.data);
   const crowd = crowdRows(liveState.data);
+  const crowdStatus = liveState.data?.crowdStatus || null;
   const crowdOrder = { High: 0, Moderate: 1, Low: 2, Unavailable: 3 };
   const rankedCrowd = [...crowd].sort((a, b) => (crowdOrder[a.level] ?? 4) - (crowdOrder[b.level] ?? 4));
+  const crowdRetryAt = crowdStatus?.nextRetryAt ? fmtFetchedAt(crowdStatus.nextRetryAt) : '';
+  const crowdUpdatedAt = liveState.data?.crowdFetchedAt ? fmtFetchedAt(liveState.data.crowdFetchedAt) : '';
 
   return (
     <main className="page-shell">
@@ -693,7 +699,24 @@ function LivePage({ liveState, communityState, refreshLive, credentials, navigat
             </section>
             <section className="card-surface live-card">
               <div className="section-title"><div><span>Station Crowd Density Real Time</span><h2>Busiest readings</h2></div><span className="source-badge lta">LTA DataMall — Live</span></div>
-              {rankedCrowd.length ? <div className="crowd-table">{rankedCrowd.slice(0, 18).map((row, index) => <div key={`${row.sourceLine}-${row.code}-${index}`}><span className={`crowd-dot ${row.level.toLowerCase()}`} /><b>{row.station}</b><small>{row.code} · {row.line}</small><span className={`crowd-level ${row.level.toLowerCase()}`}>{row.level}</span></div>)}</div> : <div className="healthy-message"><Info /> No crowd-density rows were returned by LTA for this refresh.</div>}
+              {crowdStatus?.state === 'rate_limited' && (
+                <div className="cors-warning"><AlertTriangle size={17} />{rankedCrowd.length ? `LTA temporarily rate-limited crowd-density requests. Showing the last successful readings${crowdUpdatedAt ? ` from ${crowdUpdatedAt}` : ''}.` : 'LTA temporarily rate-limited crowd-density requests.'} PulseRoute will retry automatically{crowdRetryAt ? ` after ${crowdRetryAt}` : ''}.</div>
+              )}
+              {crowdStatus?.state === 'partial' && (
+                <div className="inline-message info"><Info size={16} />Some LTA crowd-density line requests failed. PulseRoute kept the most recent successful readings for affected lines and will retry on the next scheduled refresh.</div>
+              )}
+              {rankedCrowd.length ? (
+                <>
+                  <div className="crowd-table">{rankedCrowd.slice(0, 18).map((row, index) => <div key={`${row.sourceLine}-${row.code}-${index}`}><span className={`crowd-dot ${row.level.toLowerCase()}`} /><b>{row.station}</b><small>{row.code} · {row.line}</small><span className={`crowd-level ${row.level.toLowerCase()}`}>{row.level}</span></div>)}</div>
+                  {crowdStatus?.state === 'ok' && crowdUpdatedAt && <div className="healthy-message"><CheckCircle2 /> Crowd density refreshed successfully at {crowdUpdatedAt}. Next scheduled crowd refresh is approximately 5 minutes later.</div>}
+                </>
+              ) : liveState.crowdLoading ? (
+                <div className="healthy-message"><RefreshCw className="spin" /> Refreshing LTA crowd-density readings sequentially…</div>
+              ) : crowdStatus?.state === 'rate_limited' ? (
+                <div className="cors-warning"><AlertTriangle size={17} />No previous crowd snapshot is available yet. LTA is temporarily rate-limiting this endpoint; PulseRoute will retry automatically{crowdRetryAt ? ` after ${crowdRetryAt}` : ''}.</div>
+              ) : (
+                <div className="healthy-message"><Info /> {crowdStatus?.state === 'empty' ? 'LTA successfully responded but returned no crowd-density rows for this refresh.' : 'Crowd-density data has not been loaded yet.'}</div>
+              )}
             </section>
           </div>
         </>
@@ -1169,7 +1192,8 @@ function App() {
   const [activeJourney, setActiveJourney] = useState(loadJourney);
   const [demoCondition, setDemoCondition] = useState({ type: 'normal', id: 'initial-normal' });
   const [credentials, setCredentials] = useState(loadApiKeys);
-  const [liveState, setLiveState] = useState({ data: null, error: '', reason: '', loading: false });
+  const [liveState, setLiveState] = useState({ data: null, error: '', reason: '', loading: false, crowdLoading: false });
+  const crowdScheduleRef = useRef({ lastAttemptAt: 0, consecutiveRateLimits: 0, nextAllowedAt: 0, inFlight: false });
   const [communityState, setCommunityState] = useState({ configured: false, mode: 'local', source: 'Community demo — this browser', reports: [], aggregates: [], fetchedAt: '', error: '', reason: '', loading: false });
 
   const navigate = useCallback(id => {
@@ -1191,21 +1215,116 @@ function App() {
     return result;
   }, [credentials, refreshCommunity]);
 
+  const refreshCrowd = useCallback(async () => {
+    if (!hasLtaKey(credentials)) return { skipped: true, reason: 'not_configured' };
+    const schedule = crowdScheduleRef.current;
+    const now = Date.now();
+    const dueAt = Math.max(schedule.lastAttemptAt + CROWD_REFRESH_MS, schedule.nextAllowedAt);
+    if (schedule.inFlight || now < dueAt) return { skipped: true, reason: schedule.inFlight ? 'in_flight' : 'not_due' };
+
+    schedule.inFlight = true;
+    schedule.lastAttemptAt = now;
+    setLiveState(state => ({ ...state, crowdLoading: true }));
+
+    try {
+      const result = await fetchCrowdDensity(credentials.ltaDataMallKey);
+      const status = { ...result.status };
+
+      if (status.state === 'rate_limited') {
+        schedule.consecutiveRateLimits += 1;
+        const delay = crowdBackoffMs(schedule.consecutiveRateLimits);
+        schedule.nextAllowedAt = Date.now() + delay;
+        status.nextRetryAt = new Date(schedule.nextAllowedAt).toISOString();
+        status.backoffMinutes = Math.round(delay / 60_000);
+      } else {
+        schedule.consecutiveRateLimits = 0;
+        schedule.nextAllowedAt = 0;
+      }
+
+      setLiveState(state => {
+        const current = state.data || {
+          configured: true,
+          source: 'LTA DataMall — Live',
+          fetchedAt: '',
+          alerts: [],
+          crowd: {},
+        };
+        const mergedCrowd = { ...(current.crowd || {}), ...(result.crowd || {}) };
+        const hasFreshCrowdLines = Object.keys(result.crowd || {}).length > 0;
+        return {
+          ...state,
+          data: {
+            ...current,
+            configured: true,
+            source: 'LTA DataMall — Live',
+            crowd: mergedCrowd,
+            crowdFetchedAt: hasFreshCrowdLines ? result.fetchedAt : current.crowdFetchedAt,
+            crowdStatus: status,
+          },
+          crowdLoading: false,
+        };
+      });
+      return result;
+    } catch (error) {
+      const reason = error instanceof DataMallRequestError ? error.code : 'connection_failed';
+      const retryAt = Date.now() + CROWD_REFRESH_MS;
+      schedule.nextAllowedAt = Math.max(schedule.nextAllowedAt, retryAt);
+      setLiveState(state => ({
+        ...state,
+        data: state.data ? {
+          ...state.data,
+          crowdStatus: {
+            state: 'error',
+            message: error?.message || 'LTA crowd-density refresh failed.',
+            nextRetryAt: new Date(schedule.nextAllowedAt).toISOString(),
+          },
+        } : state.data,
+        crowdLoading: false,
+        reason: state.data ? state.reason : reason,
+        error: state.data ? state.error : (error?.message || 'LTA crowd-density refresh failed.'),
+      }));
+      return { error, reason };
+    } finally {
+      schedule.inFlight = false;
+    }
+  }, [credentials.ltaDataMallKey]);
+
   const refreshLive = useCallback(async () => {
     if (!hasLtaKey(credentials)) {
-      setLiveState({ data: null, error: 'LTA DataMall Account Key is not configured. Add it in Settings to attempt live transport data.', reason: 'not_configured', loading: false });
+      crowdScheduleRef.current = { lastAttemptAt: 0, consecutiveRateLimits: 0, nextAllowedAt: 0, inFlight: false };
+      setLiveState({ data: null, error: 'LTA DataMall Account Key is not configured. Add it in Settings to attempt live transport data.', reason: 'not_configured', loading: false, crowdLoading: false });
       return;
     }
 
     setLiveState(state => ({ ...state, loading: true }));
     try {
-      const data = await fetchLiveRail(credentials.ltaDataMallKey);
-      setLiveState({ data, error: '', reason: '', loading: false });
+      const alertsResult = await fetchTrainServiceAlerts(credentials.ltaDataMallKey);
+      setLiveState(state => ({
+        ...state,
+        data: {
+          ...(state.data || {}),
+          configured: true,
+          source: 'LTA DataMall — Live',
+          fetchedAt: alertsResult.fetchedAt,
+          alerts: alertsResult.alerts,
+          crowd: state.data?.crowd || {},
+        },
+        error: '',
+        reason: '',
+        loading: false,
+      }));
+      await refreshCrowd();
     } catch (error) {
       const reason = error instanceof DataMallRequestError ? error.code : 'connection_failed';
-      setLiveState({ data: null, error: error?.message || 'LTA DataMall could not be reached directly from this browser.', reason, loading: false });
+      setLiveState(state => ({
+        ...state,
+        data: state.data,
+        error: error?.message || 'LTA DataMall could not be reached through the local proxy.',
+        reason,
+        loading: false,
+      }));
     }
-  }, [credentials.ltaDataMallKey]);
+  }, [credentials.ltaDataMallKey, refreshCrowd]);
 
   useEffect(() => {
     const onHash = () => {
@@ -1217,10 +1336,11 @@ function App() {
   }, []);
 
   useEffect(() => {
+    crowdScheduleRef.current = { lastAttemptAt: 0, consecutiveRateLimits: 0, nextAllowedAt: 0, inFlight: false };
     refreshLive();
     const timer = window.setInterval(refreshLive, 60_000);
     return () => window.clearInterval(timer);
-  }, [refreshLive]);
+  }, [refreshLive, credentials.ltaDataMallKey]);
 
   useEffect(() => {
     refreshCommunity();
