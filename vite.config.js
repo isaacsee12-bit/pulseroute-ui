@@ -8,8 +8,19 @@ const ltaProxy = {
   rewrite: path => path.replace(/^\/lta-proxy/, '/ltaodataservice'),
   configure(proxy) {
     proxy.on('proxyReq', proxyReq => {
-      // The browser calls Vite on the same origin, so CORS is not involved.
-      // Keep browser-origin metadata out of the upstream DataMall request.
+      proxyReq.removeHeader('origin');
+      proxyReq.removeHeader('referer');
+    });
+  },
+};
+
+const geminiProxy = {
+  target: 'https://generativelanguage.googleapis.com',
+  changeOrigin: true,
+  secure: true,
+  rewrite: path => path.replace(/^\/gemini-proxy/, ''),
+  configure(proxy) {
+    proxy.on('proxyReq', proxyReq => {
       proxyReq.removeHeader('origin');
       proxyReq.removeHeader('referer');
     });
@@ -21,11 +32,13 @@ export default defineConfig({
   server: {
     proxy: {
       '/lta-proxy': ltaProxy,
+      '/gemini-proxy': geminiProxy,
     },
   },
   preview: {
     proxy: {
       '/lta-proxy': ltaProxy,
+      '/gemini-proxy': geminiProxy,
     },
   },
 });
