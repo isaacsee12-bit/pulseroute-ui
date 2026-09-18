@@ -34,6 +34,8 @@ import {
 } from 'lucide-react';
 import './app-v2.css';
 import './community-crowd.css';
+import './voice-trip.css';
+import VoiceTripButton from './components/VoiceTripButton.jsx';
 import { LINE_META, MRT_STATIONS, STATION_BY_NAME, UPCOMING_STATIONS, searchStations } from './data/mrtNetwork.js';
 import { buildSimulationReliefRoute } from './data/demoRoutes.js';
 import { buildReroute, currentLeg, planMrtRoutes } from './lib/mrtRouter.js';
@@ -53,6 +55,7 @@ import {
 } from './lib/liveRail.js';
 import { chooseRerouteAlternative, rankRoutes, routeSignature } from './lib/routeScoring.js';
 import { crowdIntelligenceForRoute } from './lib/crowdIntelligence.js';
+import { GEMINI_VOICE_MODEL, testGeminiApiKey } from './lib/geminiVoice.js';
 import {
   COMMUNITY_LEVELS,
   CommunityCrowdError,
@@ -64,6 +67,7 @@ import {
 import {
   clearApiKeys,
   hasCommunityStore,
+  hasGeminiKey,
   hasLtaKey,
   hasOneMapToken,
   isOneMapTokenExpired,
@@ -512,11 +516,11 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
     if (orderedRoutes.length && !orderedRoutes.some(route => route.id === selectedId)) setSelectedId(orderedRoutes[0].id);
   }, [orderedRoutes, selectedId]);
 
-  const getRoutes = async () => {
+  const getRoutes = async ({ origin = from, destination = to } = {}) => {
     setError('');
     setMessage('');
-    const resolvedFrom = resolveStationInput(from);
-    const resolvedTo = resolveStationInput(to);
+    const resolvedFrom = resolveStationInput(origin);
+    const resolvedTo = resolveStationInput(destination);
     if (!resolvedFrom || !resolvedTo) {
       setError('Choose valid MRT stations from the suggestions. You can type a station name or code, including approximate spelling.');
       return;
@@ -574,6 +578,21 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
     }
   };
 
+  const applyVoiceIntent = async intent => {
+    const resolvedFrom = resolveStationInput(intent?.origin);
+    const resolvedTo = resolveStationInput(intent?.destination);
+    if (!resolvedFrom || !resolvedTo) {
+      throw new Error('I could not match both spoken locations to supported MRT stations. Try saying “From Buona Vista to Serangoon.”');
+    }
+    if (resolvedFrom === resolvedTo) {
+      throw new Error('Your spoken origin and destination resolved to the same MRT station.');
+    }
+    setFrom(resolvedFrom);
+    setTo(resolvedTo);
+    await getRoutes({ origin: resolvedFrom, destination: resolvedTo });
+    return { origin: resolvedFrom, destination: resolvedTo };
+  };
+
   const startRoute = route => {
     const journey = { ...route, targetDeparture: departure, startedAt: new Date().toISOString() };
     setActiveJourney(journey);
@@ -598,7 +617,13 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
             </div>
             <div className="planner-actions">
               <div className="preference-tabs">{PREFS.map(([id, label]) => <button key={id} type="button" className={preference === id ? 'active' : ''} onClick={() => setPreference(id)}>{label}</button>)}</div>
-              <button type="button" className="primary-button" onClick={getRoutes} disabled={loading}>{loading ? <><RefreshCw className="spin" size={16} /> Finding routes</> : <>Get Routes <ArrowRight size={17} /></>}</button>
+              <VoiceTripButton
+                apiKey={credentials.geminiApiKey}
+                stationNames={MRT_STATIONS.map(station => station.name)}
+                onIntent={applyVoiceIntent}
+                onNeedKey={() => navigate('settings')}
+              />
+              <button type="button" className="primary-button" onClick={() => getRoutes()} disabled={loading}>{loading ? <><RefreshCw className="spin" size={16} /> Finding routes</> : <>Get Routes <ArrowRight size={17} /></>}</button>
             </div>
             {error && <div className="inline-message error"><AlertTriangle size={16} />{error}</div>}
             {message && <div className="inline-message info"><Info size={16} />{message}</div>}
