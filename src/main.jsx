@@ -1105,12 +1105,26 @@ function App() {
   const [demoCondition, setDemoCondition] = useState({ type: 'normal', id: 'initial-normal' });
   const [credentials, setCredentials] = useState(loadApiKeys);
   const [liveState, setLiveState] = useState({ data: null, error: '', reason: '', loading: false });
+  const [communityState, setCommunityState] = useState({ configured: false, mode: 'local', source: 'Community demo — this browser', reports: [], aggregates: [], fetchedAt: '', error: '', reason: '', loading: false });
 
   const navigate = useCallback(id => {
     setPage(id);
     if (window.location.hash !== `#${id}`) window.location.hash = id;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
+
+  const refreshCommunity = useCallback(async () => {
+    setCommunityState(state => ({ ...state, loading: true }));
+    const data = await fetchCommunityCrowd(credentials);
+    setCommunityState({ ...data, loading: false });
+    return data;
+  }, [credentials.supabaseUrl, credentials.supabasePublishableKey]);
+
+  const submitCommunityReport = useCallback(async report => {
+    const result = await submitCrowdReport(report, credentials);
+    await refreshCommunity();
+    return result;
+  }, [credentials, refreshCommunity]);
 
   const refreshLive = useCallback(async () => {
     if (!hasLtaKey(credentials)) {
@@ -1144,6 +1158,12 @@ function App() {
   }, [refreshLive]);
 
   useEffect(() => {
+    refreshCommunity();
+    const timer = window.setInterval(refreshCommunity, 30_000);
+    return () => window.clearInterval(timer);
+  }, [refreshCommunity]);
+
+  useEffect(() => {
     if (activeJourney) window.sessionStorage.setItem('pulseroute-active-journey', JSON.stringify(activeJourney));
     else window.sessionStorage.removeItem('pulseroute-active-journey');
   }, [activeJourney]);
@@ -1151,11 +1171,11 @@ function App() {
   return (
     <div className="app-root">
       <TopBar page={page} navigate={navigate} liveState={liveState} />
-      {page === 'plan' && <PlanPage liveState={liveState} activeJourney={activeJourney} setActiveJourney={setActiveJourney} navigate={navigate} credentials={credentials} />}
-      {page === 'live' && <LivePage liveState={liveState} refreshLive={refreshLive} credentials={credentials} navigate={navigate} />}
-      {page === 'journey' && <JourneyPage activeJourney={activeJourney} setActiveJourney={setActiveJourney} liveState={liveState} demoCondition={demoCondition} setDemoCondition={setDemoCondition} navigate={navigate} credentials={credentials} />}
+      {page === 'plan' && <PlanPage liveState={liveState} communityState={communityState} activeJourney={activeJourney} setActiveJourney={setActiveJourney} navigate={navigate} credentials={credentials} />}
+      {page === 'live' && <LivePage liveState={liveState} communityState={communityState} refreshLive={refreshLive} credentials={credentials} navigate={navigate} />}
+      {page === 'journey' && <JourneyPage activeJourney={activeJourney} setActiveJourney={setActiveJourney} liveState={liveState} communityState={communityState} submitCommunityReport={submitCommunityReport} demoCondition={demoCondition} setDemoCondition={setDemoCondition} navigate={navigate} credentials={credentials} />}
       {page === 'about' && <AboutPage liveState={liveState} credentials={credentials} navigate={navigate} />}
-      {page === 'settings' && <SettingsPage credentials={credentials} setCredentials={setCredentials} refreshLive={refreshLive} />}
+      {page === 'settings' && <SettingsPage credentials={credentials} setCredentials={setCredentials} refreshLive={refreshLive} refreshCommunity={refreshCommunity} />}
     </div>
   );
 }
