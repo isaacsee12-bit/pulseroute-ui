@@ -1,0 +1,124 @@
+.community-crowd-card {
+  margin-top: 12px;
+  padding: 15px;
+}
+.community-crowd-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.community-crowd-head > div:first-child {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.community-crowd-head svg { color: #0878f9; flex: 0 0 auto; margin-top: 2px; }
+.community-crowd-head span { color: #7185a4; font-size: 8px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.community-crowd-head h3 { margin: 3px 0 0; color: var(--navy); font-size: 14px; }
+.community-crowd-head p { margin: 5px 0 0; color: #617596; font-size: 9px; line-height: 1.45; }
+.crowd-report-location {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.crowd-report-location label { display: grid; gap: 5px; color: #687d9d; font-size: 8.5px; font-weight: 700; }
+.crowd-report-location select {
+  min-height: 38px;
+  border: 1px solid #d2e0ed;
+  border-radius: 9px;
+  padding: 0 10px;
+  color: #17355f;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 650;
+}
+.traffic-light-feedback {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 8px;
+  margin-top: 11px;
+}
+.traffic-light-feedback button {
+  min-height: 54px;
+  border: 1px solid #d8e4ee;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #264667;
+  font-size: 9px;
+  font-weight: 800;
+}
+.traffic-light-feedback button:hover { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(31,76,118,.08); }
+.traffic-dot { width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto; box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); }
+.traffic-dot.green { background: #18ad70; }
+.traffic-dot.yellow { background: #f0b429; }
+.traffic-dot.red { background: #df4050; }
+.community-current {
+  min-width: 205px;
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: #f7fafe;
+}
+.community-current b { display: block; color: #17355f; font-size: 10px; }
+.community-current small { display: block; margin-top: 3px; color: #70839f; font-size: 8px; line-height: 1.4; }
+.community-current .traffic-dot { display: inline-block; width: 9px; height: 9px; margin-right: 5px; }
+.community-feedback-status {
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #eff8f4;
+  color: #17664d;
+  font-size: 8.5px;
+  line-height: 1.45;
+}
+.community-feedback-status.warning { color: #7a5b1b; background: #fff7e5; }
+.community-route-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -3px 12px 10px;
+  color: #506887;
+  font-size: 8.2px;
+}
+.community-route-note strong { color: #1f466f; }
+.community-route-note .traffic-dot { width: 9px; height: 9px; }
+.community-live-panel { margin-top: 12px; padding: 14px; }
+.community-live-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin-top: 10px; }
+.community-live-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 9px 10px; border: 1px solid #e1eaf2; border-radius: 9px; background: #fbfdff; }
+.community-live-row b { display: block; color: #17355f; font-size: 9.5px; }
+.community-live-row small { display: block; margin-top: 2px; color: #7586a1; font-size: 7.8px; }
+.community-live-row > span:last-child { color: #5f7391; font-size: 8px; font-weight: 700; }
+.community-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #345b7d;
+  background: #eef6fc;
+  font-size: 7.8px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.community-source-pill.local { color: #7b5a1c; background: #fff5dd; }
+.settings-page .settings-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1180px) {
+  .settings-page .settings-grid { grid-template-columns: 1fr 1fr; }
+  .settings-page .settings-grid .credential-card:last-child { grid-column: 1 / -1; }
+  .community-live-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 760px) {
+  .settings-page .settings-grid { grid-template-columns: 1fr; }
+  .settings-page .settings-grid .credential-card:last-child { grid-column: auto; }
+  .crowd-report-location { grid-template-columns: 1fr; }
+  .community-current { min-width: 0; }
+  .traffic-light-feedback { grid-template-columns: 1fr; }
+  .community-live-grid { grid-template-columns: 1fr; }
+}
