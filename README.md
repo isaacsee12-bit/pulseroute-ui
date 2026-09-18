@@ -23,8 +23,9 @@ The data/routing stack is:
 1. **SLA OneMap** — authenticated Search and public-transport routing. Successful itineraries can contain ordered `WALK`, `BUS` and `SUBWAY` legs.
 2. **LTA DataMall** — Train Service Alerts, Station Crowd Density Real Time, and optional Bus Arrival v3, forwarded through the local Vite proxy so browser CORS does not block the hackathon demo.
 3. **PulseRoute network model** — the always-available, MRT-only local routing fallback.
-4. **Community Crowd** — optional shared traffic-light crowd reports using Supabase Data REST with Row Level Security.
-5. **Simulation** — clearly labelled hackathon scenarios used only to demonstrate proactive rerouting when external APIs are unavailable.
+4. **Gemini Voice Planning** — optional audio intent extraction for origin/destination entry; PulseRoute still validates and routes locally/through OneMap.
+5. **Community Crowd** — optional shared traffic-light crowd reports using Supabase Data REST with Row Level Security.
+6. **Simulation** — clearly labelled hackathon scenarios used only to demonstrate proactive rerouting when external APIs are unavailable.
 
 ## Run locally
 
@@ -42,6 +43,31 @@ npm run build
 ```
 
 No Vercel CLI, `.env.local`, cloud function, worker, or hosted backend is required. For live LTA data, run the app with Vite (`npm run dev` or `npm run preview`) so the local DataMall proxy is available.
+
+## Gemini voice trip planning
+
+The **Plan a Trip** screen includes a **Plan with voice** control. PulseRoute records a short microphone request (maximum 10 seconds), sends the audio directly to Gemini, and asks only for a structured trip intent:
+
+```json
+{
+  "transcript": "Bring me from Buona Vista to Serangoon",
+  "origin": "Buona Vista",
+  "destination": "Serangoon"
+}
+```
+
+The implementation uses `gemini-3.5-flash-lite`, which supports audio input and structured text output. Gemini does **not** calculate the route. PulseRoute validates the returned station names against its own operational MRT dataset, fills the existing origin/destination fields, and then runs the normal PulseRoute route planner.
+
+Setup:
+
+1. Open **Settings → Gemini Voice Planning**.
+2. Paste a Google AI Studio Gemini API key.
+3. Click **Save**, then **Test Connection**.
+4. Return to **Plan a Trip** and click **Plan with voice**.
+5. Allow microphone access and say a request such as: “Bring me from Buona Vista to Serangoon.”
+6. Click **Stop & plan**, or wait for the 10-second auto-stop.
+
+The Gemini key is stored only in browser `sessionStorage`; it is not hard-coded or committed to this repository.
 
 ## Configure optional official data
 
