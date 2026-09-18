@@ -1,4 +1,5 @@
-import { alertAffectsRoute, crowdForRoute, disruptedAlerts } from './liveRail.js';
+import { alertAffectsRoute, disruptedAlerts } from './liveRail.js';
+import { crowdIntelligenceForRoute } from './crowdIntelligence.js';
 
 const WEIGHTS = {
   balanced: { time: 1, transfers: 5, walk: 0.65, crowdHigh: 13, crowdModerate: 5, disruption: 80 },
@@ -47,9 +48,9 @@ function getDemandBucket() {
   }
 }
 
-function enrichRoute(route, preference, liveData, explicitAffectedLine = '') {
+function enrichRoute(route, preference, liveData, explicitAffectedLine = '', communityCrowd = null) {
   const weights = WEIGHTS[preference] || WEIGHTS.balanced;
-  const crowd = crowdForRoute(liveData, route);
+  const crowd = crowdIntelligenceForRoute(liveData, communityCrowd, route);
   const disrupted = disruptionExposure(route, liveData, explicitAffectedLine);
   const duration = Number(route?.durationMinutes || route?.baseMinutes || 0);
   const transfers = Number(route?.transfers || 0);
@@ -75,14 +76,15 @@ function reasonFor(route, fastest, preference, spreadChoice = false) {
   const walk = Number(route.walkingMinutes || 0);
 
   if (route.disruptionExposure) return 'Uses a currently affected corridor; consider another option.';
-  if (preference === 'fastest' && extra === 0) return crowd === 'High' ? 'Fastest route, but current LTA readings indicate heavier crowding.' : 'Fastest available route for this departure time.';
-  if (preference === 'quiet' && crowd === 'Low') return extra ? `${extra} min slower than the fastest route, but current LTA readings are less crowded.` : 'Fast and currently less crowded based on available LTA readings.';
+  if (preference === 'fastest' && extra === 0) return crowd === 'High' ? 'Fastest route, but current crowd intelligence indicates heavier crowding.' : 'Fastest available route for this departure time.';
+  if (preference === 'quiet' && crowd === 'Low') return extra ? `${extra} min slower than the fastest route, but current crowd intelligence is lighter.` : 'Fast and currently less crowded based on available crowd intelligence.';
   if (preference === 'accessible' && walk <= 4) return `Prioritised for less walking${walk ? ` (${walk} min)` : ''}.`;
   if (preference === 'simple' && Number(route.transfers || 0) === 0) return 'Prioritised because it avoids transfers.';
   if (spreadChoice) return hasBus
     ? `${extra ? `${extra} min slower, but ` : ''}selected from viable alternatives to avoid concentrating everyone on the same rail route.`
     : `${extra ? `${extra} min slower, but ` : ''}selected from near-equivalent viable routes to help spread demand.`;
   if (hasBus && extra <= 10) return `${extra ? `${extra} min slower than the fastest route, but ` : ''}adds a viable bus alternative instead of relying only on rail.`;
+  if (route.crowdInfo?.community?.routeLevel === 'High') return 'Recent community reports indicate very crowded conditions on this route.';
   if (crowd === 'Low' && extra <= 8) return `${extra ? `${extra} min slower than the fastest route, but ` : ''}offers more crowding headroom.`;
   if (extra === 0) return 'Fastest available option with the current route inputs.';
   return `${extra} min slower than the fastest route, with a different transfer/walking trade-off.`;
@@ -90,7 +92,7 @@ function reasonFor(route, fastest, preference, spreadChoice = false) {
 
 export function rankRoutes(routes, preference = 'balanced', liveData = null, options = {}) {
   if (!Array.isArray(routes) || !routes.length) return [];
-  const enriched = routes.map(route => enrichRoute(route, preference, liveData, options.affectedLine));
+  const enriched = routes.map(route => enrichRoute(route, preference, liveData, options.affectedLine, options.communityCrowd));
   const fastest = [...enriched].sort((a, b) => (a.durationMinutes || Infinity) - (b.durationMinutes || Infinity))[0];
   let ordered = [...enriched].sort((a, b) => a.routeCost - b.routeCost || a.durationMinutes - b.durationMinutes);
 
@@ -126,12 +128,12 @@ function modeDiversity(route, activeRoute) {
   return score;
 }
 
-export function chooseRerouteAlternative(routes, activeRoute, { affectedLine = '', conditionType = 'disruption', liveData = null } = {}) {
+export function chooseRerouteAlternative(routes, activeRoute, { affectedLine = '', conditionType = 'disruption', liveData = null, communityCrowd = null } = {}) {
   const activeSignature = routeSignature(activeRoute);
   const candidates = (routes || [])
     .filter(route => routeSignature(route) !== activeSignature)
     .map(route => {
-      const crowd = crowdForRoute(liveData, route);
+      const crowd = crowdIntelligenceForRoute(liveData, communityCrowd, route);
       const usesAffected = routeUsesAffectedLine(route, affectedLine);
       const extraMinutes = (route.durationMinutes || 0) - (activeRoute?.durationMinutes || 0);
       let score = 100 - Math.max(0, extraMinutes) * 1.2 - Number(route.transfers || 0) * 3 - Number(route.walkingMinutes || 0) * 0.35;
@@ -150,7 +152,7 @@ export function chooseRerouteAlternative(routes, activeRoute, { affectedLine = '
   let rerouteReason = conditionType === 'disruption' && !chosen.usesAffected
     ? `Avoids the affected ${affectedLine || 'rail'} corridor.`
     : conditionType === 'crowding' && chosen.crowd.label === 'Low'
-      ? 'Uses an alternative with lower current LTA crowd readings.'
+      ? 'Uses an alternative with lower current crowd intelligence.'
       : 'Provides a meaningfully different route under the changed conditions.';
   if (hasBus) rerouteReason += ' Includes a bus alternative rather than shifting everyone to the same rail path.';
   else if (walk > 0) rerouteReason += ' Uses walking to reach a different connection.';
