@@ -4,17 +4,27 @@
   "version": "1.0.1",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node --env-file-if-exists=.env.local server/index.js --dev",
+    "start": "node --env-file-if-exists=.env.local server/index.js",
     "test:smoke": "node scripts/smoke-test.mjs",
+    "test:server": "node --test scripts/server-test.mjs",
+    "test:ui": "playwright test",
+    "audit:secrets": "node scripts/audit-secrets.mjs",
+    "test:deployed": "node scripts/deployment-test.mjs",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "node --env-file-if-exists=.env.local server/index.js",
+    "cloud:secrets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/set-cloud-secrets.ps1"
   },
   "dependencies": {
+    "@google-cloud/secret-manager": "^6.1.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
     "lucide-react": "0.468.0",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@vitejs/plugin-react": "4.3.4",
     "vite": "5.4.14"
   }

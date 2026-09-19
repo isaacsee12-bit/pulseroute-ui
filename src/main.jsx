@@ -11,8 +11,6 @@ import {
   Clock3,
   CloudOff,
   Database,
-  Eye,
-  EyeOff,
   Footprints,
   Info,
   KeyRound,
@@ -27,7 +25,6 @@ import {
   ShieldCheck,
   Sparkles,
   TrainFront,
-  Trash2,
   Users,
   X,
   Zap,
@@ -41,8 +38,6 @@ import { buildSimulationReliefRoute } from './data/demoRoutes.js';
 import { buildReroute, currentLeg, planMrtRoutes, transitLegLabel } from './lib/mrtRouter.js';
 import {
   fetchOneMapTransitRoutes,
-  OneMapRequestError,
-  testOneMapToken,
 } from './lib/oneMapTransit.js';
 import {
   alertAffectsRoute,
@@ -55,30 +50,21 @@ import {
   CROWD_REFRESH_MS,
   crowdBackoffMs,
   mergeCrowdSnapshots,
-  testLtaDataMallKey,
 } from './lib/liveRail.js';
 import { chooseRerouteAlternative, rankRoutes, routeSignature } from './lib/routeScoring.js';
 import { crowdIntelligenceForRoute } from './lib/crowdIntelligence.js';
-import { GEMINI_VOICE_MODEL, testGeminiApiKey } from './lib/geminiVoice.js';
 import {
   COMMUNITY_LEVELS,
-  CommunityCrowdError,
   communityAggregateForStation,
   fetchCommunityCrowd,
   submitCrowdReport,
-  testCommunityCrowdConnection,
 } from './lib/communityCrowd.js';
 import {
-  clearApiKeys,
-  hasCommunityStore,
-  hasGeminiKey,
-  hasLtaKey,
-  hasOneMapToken,
-  isOneMapTokenExpired,
-  loadApiKeys,
-  oneMapTokenExpiry,
-  saveApiKeys,
-} from './lib/apiKeys.js';
+  canUseLta,
+  canUseOneMap,
+  loadIntegrations,
+  checkIntegrations,
+} from './lib/integrations.js';
 
 const NAV = [
   ['plan', 'Plan a Trip'],
@@ -119,18 +105,6 @@ function fmtFetchedAt(value) {
     minute: '2-digit',
     second: '2-digit',
   }).format(date);
-}
-
-function fmtExpiry(value) {
-  if (!value) return '';
-  return new Intl.DateTimeFormat('en-SG', {
-    timeZone: 'Asia/Singapore',
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(value);
 }
 
 function formatDistance(value) {
@@ -320,7 +294,7 @@ function CrowdFeedback({ route, communityState, onSubmit }) {
         warning: !result.shared,
         text: result.shared
           ? `Thanks — your ${COMMUNITY_LEVELS[level].label.toLowerCase()} report is now shared with other PulseRoute users.`
-          : `Saved on this browser only. ${result.warning || 'Configure Community Crowd in Settings to share reports across devices.'}`,
+          : `Saved on this browser only. ${result.warning || 'Check Community Crowd in Cloud Integrations to share reports across devices.'}`,
       });
     } catch (error) {
       setStatus({
@@ -376,7 +350,7 @@ function CommunityCrowdPanel({ communityState, navigate }) {
           <span>{row.reportCount} report{row.reportCount === 1 ? '' : 's'}</span>
         </div>
       ))}</div> : <div className="healthy-message"><Info />No community crowd reports in the last 30 minutes.</div>}
-      {communityState?.mode !== 'shared' && <button type="button" className="text-button" onClick={() => navigate('settings')}>Configure shared Community Crowd →</button>}
+      {communityState?.mode !== 'shared' && <button type="button" className="text-button" onClick={() => navigate('settings')}>Check Community Crowd integration →</button>}
     </section>
   );
 }
@@ -427,9 +401,9 @@ function LegModeIcon({ mode }) {
   return <TrainFront size={17} />;
 }
 
-function BusArrivalInline({ leg, credentials }) {
+function BusArrivalInline({ leg, integrations }) {
   const [state, setState] = useState({ data: null, error: '', loading: false });
-  const canLoad = hasLtaKey(credentials) && leg?.mode === 'BUS' && /^\d{5}$/.test(String(leg?.fromStopCode || '')) && Boolean(leg?.service);
+  const canLoad = canUseLta(integrations) && leg?.mode === 'BUS' && /^\d{5}$/.test(String(leg?.fromStopCode || '')) && Boolean(leg?.service);
 
   useEffect(() => {
     let cancelled = false;
@@ -438,11 +412,11 @@ function BusArrivalInline({ leg, credentials }) {
       return () => { cancelled = true; };
     }
     setState({ data: null, error: '', loading: true });
-    fetchBusArrival(leg.fromStopCode, leg.service, credentials.ltaDataMallKey)
+    fetchBusArrival(leg.fromStopCode, leg.service)
       .then(data => { if (!cancelled) setState({ data, error: '', loading: false }); })
-      .catch(error => { if (!cancelled) setState({ data: null, error: error?.code === 'proxy_unavailable' ? 'Start PulseRoute with npm run dev so the local DataMall proxy is available.' : 'Live bus arrival unavailable.', loading: false }); });
+      .catch(() => { if (!cancelled) setState({ data: null, error: 'Live bus arrival unavailable.', loading: false }); });
     return () => { cancelled = true; };
-  }, [canLoad, leg?.fromStopCode, leg?.service, credentials.ltaDataMallKey]);
+  }, [canLoad, leg?.fromStopCode, leg?.service]);
 
   if (!canLoad) return null;
   if (state.loading) return <div className="bus-live-inline unavailable"><RefreshCw className="spin" size={13} /> Checking LTA Bus Arrival…</div>;
@@ -451,7 +425,7 @@ function BusArrivalInline({ leg, credentials }) {
   return null;
 }
 
-function RouteDiagram({ route, credentials }) {
+function RouteDiagram({ route, integrations }) {
   const legs = route?.legs || route?.segments || [];
   if (!legs.length) return null;
   return (
@@ -473,7 +447,7 @@ function RouteDiagram({ route, credentials }) {
               <div className={`leg-icon ${isWalk ? 'walk' : isBus ? 'bus' : 'train'}`} style={iconStyle}><LegModeIcon mode={mode} /></div>
               <div className="leg-service"><b>{serviceTitle}</b>{leg.headsign && <small>towards {leg.headsign}</small>}{!isWalk && !isBus && leg.line && <small>{leg.line}</small>}</div>
               <div className="leg-path"><b>{from || 'Start'} → {to || 'Next stop'}</b><div className="leg-meta">{leg.durationMinutes != null && <span><Clock3 size={11} />{leg.durationMinutes} min</span>}{distance && <span>{distance}</span>}{leg.stopCount != null && leg.stopCount > 0 && <span>{leg.stopCount} stop{leg.stopCount === 1 ? '' : 's'}</span>}{(leg.departure || leg.arrival) && <span>{leg.departure || '—'} → {leg.arrival || '—'}</span>}</div></div>
-              {isBus && <BusArrivalInline leg={leg} credentials={credentials} />}
+              {isBus && <BusArrivalInline leg={leg} integrations={integrations} />}
             </div>
           );
         })}
@@ -483,23 +457,23 @@ function RouteDiagram({ route, credentials }) {
   );
 }
 
-function ExternalDataNotice({ credentials, navigate, compact = false }) {
-  const oneMapReady = hasOneMapToken(credentials);
-  const ltaReady = hasLtaKey(credentials);
+function ExternalDataNotice({ integrations, navigate, compact = false }) {
+  const oneMapReady = canUseOneMap(integrations);
+  const ltaReady = canUseLta(integrations);
   if (oneMapReady && ltaReady) return null;
   return (
     <div className={`setup-notice ${compact ? 'compact' : ''}`}>
       <KeyRound size={19} />
       <div>
         <b>Optional official data connections</b>
-        <p>PulseRoute always works with its local MRT network model. Add a OneMap Access Token for multimodal public-transport routes and an LTA DataMall Account Key for live rail data and optional bus arrivals.</p>
+        <p>PulseRoute always works with its local MRT network model. Check Cloud Integrations for the status of multimodal routing, live transport data and voice planning.</p>
         <button type="button" className="text-button" onClick={() => navigate('settings')}>Open Settings →</button>
       </div>
     </div>
   );
 }
 
-function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, navigate, credentials }) {
+function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, navigate, integrations }) {
   const initialDeparture = activeJourney?.targetDeparture || singaporeClock(10);
   const initialFrom = activeJourney?.origin || 'Tampines';
   const initialTo = activeJourney?.destination || 'Buona Vista';
@@ -549,8 +523,8 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
     setRoutes(localRoutes);
     setSelectedId(localRoutes[0].id);
 
-    if (!hasOneMapToken(credentials)) {
-      setMessage('Using PulseRoute’s MRT-only network fallback. Add a OneMap Access Token in Settings to request multimodal public-transport routes with bus and walking legs.');
+    if (!canUseOneMap(integrations)) {
+      setMessage('Using PulseRoute’s MRT-only network fallback. Check the OneMap cloud integration for multimodal public-transport routes.');
       return;
     }
 
@@ -560,7 +534,6 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
         origin: resolvedFrom,
         destination: resolvedTo,
         departureTime: departure,
-        token: credentials.oneMapToken,
       });
       if (oneMapRoutes.length) {
         const ordered = sortRoutes(oneMapRoutes, preference, liveState.data, communityState);
@@ -572,10 +545,10 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
       }
     } catch (routeError) {
       const reason = routeError?.code === 'expired_token'
-        ? 'Your OneMap token has expired.'
+        ? 'The OneMap cloud integration needs its token renewed.'
         : routeError?.code === 'invalid_token'
-          ? 'OneMap rejected the access token.'
-          : 'OneMap routing could not be reached directly from this browser.';
+          ? 'The OneMap cloud integration is misconfigured.'
+          : 'The OneMap cloud integration is unavailable.';
       setMessage(`${reason} PulseRoute has safely fallen back to its local MRT network model.`);
     } finally {
       setLoading(false);
@@ -622,10 +595,8 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
             <div className="planner-actions">
               <div className="preference-tabs">{PREFS.map(([id, label]) => <button key={id} type="button" className={preference === id ? 'active' : ''} onClick={() => setPreference(id)}>{label}</button>)}</div>
               <VoiceTripButton
-                apiKey={credentials.geminiApiKey}
                 stationNames={MRT_STATIONS.map(station => station.name)}
                 onIntent={applyVoiceIntent}
-                onNeedKey={() => navigate('settings')}
               />
               <button type="button" className="primary-button" onClick={() => getRoutes()} disabled={loading}>{loading ? <><RefreshCw className="spin" size={16} /> Finding routes</> : <>Get Routes <ArrowRight size={17} /></>}</button>
             </div>
@@ -649,11 +620,11 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
               />
             ))}
           </div>
-          <RouteDiagram route={selected} credentials={credentials} />
+          <RouteDiagram route={selected} integrations={integrations} />
         </div>
         <aside className="planner-side">
           <section className="side-info-card"><div className="card-icon"><Zap /></div><h3>What PulseRoute adds</h3><p>OneMap supplies multimodal public-transport itineraries when reachable. LTA DataMall can add train disruption, station crowding and bus arrival signals. PulseRoute scores the available options by time, walking, transfers, disruption exposure, crowding and your selected preference instead of blindly choosing the same fastest route for everyone.</p></section>
-          <ExternalDataNotice credentials={credentials} navigate={navigate} compact />
+          <ExternalDataNotice integrations={integrations} navigate={navigate} compact />
           <section className="side-info-card"><div className="card-icon"><TrainFront /></div><h3>Fallback coverage</h3><p>If OneMap is unavailable, the fallback router covers currently operational MRT stations on NSL, EWL/Changi branch, NEL, CCL including CCL6, DTL and TEL through Bayshore.</p><small>The fallback is MRT-only; it does not invent bus routes or walking geometry.</small></section>
         </aside>
       </section>
@@ -661,7 +632,7 @@ function PlanPage({ liveState, communityState, activeJourney, setActiveJourney, 
   );
 }
 
-function LivePage({ liveState, communityState, refreshLive, credentials, navigate }) {
+function LivePage({ liveState, communityState, refreshLive, integrations, navigate }) {
   const alerts = disruptedAlerts(liveState.data);
   const crowd = crowdRows(liveState.data);
   const crowdStatus = liveState.data?.crowdStatus || null;
@@ -675,15 +646,14 @@ function LivePage({ liveState, communityState, refreshLive, credentials, navigat
       <PageHeading
         eyebrow="Network intelligence"
         title="Live Updates"
-        copy="PulseRoute uses your session-only LTA Account Key through the local Vite DataMall proxy. This avoids DataMall browser CORS while keeping setup local to your laptop."
-        action={<button type="button" className="secondary-button" onClick={refreshLive} disabled={liveState.loading || !hasLtaKey(credentials)}><RefreshCw className={liveState.loading ? 'spin' : ''} size={16} /> Refresh</button>}
+        copy="Official LTA alerts, crowd density and bus arrivals are securely delivered through PulseRoute on Google Cloud Run."
+        action={<button type="button" className="secondary-button" onClick={refreshLive} disabled={liveState.loading || !canUseLta(integrations)}><RefreshCw className={liveState.loading ? 'spin' : ''} size={16} /> Refresh</button>}
       />
       {!liveState.data ? (
         <section className="empty-live card-surface">
           <CloudOff />
           <h2>LTA live data is unavailable</h2>
-          <p>{liveState.error || 'Add an LTA DataMall Account Key in Settings, then test the connection.'}</p>
-          {['proxy_unavailable', 'proxy_upstream_failed'].includes(liveState.reason) && <div className="cors-warning"><AlertTriangle size={17} />{liveState.reason === 'proxy_unavailable' ? 'The local DataMall proxy is not active. Start PulseRoute with npm run dev (or npm run preview).' : 'The local proxy is running but could not reach LTA DataMall.'}</div>}
+          <p>{liveState.error || 'Check LTA DataMall in Cloud Integrations.'}</p>
           <button type="button" className="secondary-button" onClick={() => navigate('settings')}><SettingsIcon size={16} /> Open Settings</button>
         </section>
       ) : (
@@ -742,7 +712,7 @@ function journeyTransfer(route) {
   };
 }
 
-function JourneyPage({ activeJourney, setActiveJourney, liveState, communityState, submitCommunityReport, demoCondition, setDemoCondition, navigate, credentials }) {
+function JourneyPage({ activeJourney, setActiveJourney, liveState, communityState, submitCommunityReport, demoCondition, setDemoCondition, navigate, integrations }) {
   const [dismissedKey, setDismissedKey] = useState('');
   const [recommendation, setRecommendation] = useState(null);
   const [rerouteLoading, setRerouteLoading] = useState(false);
@@ -794,13 +764,12 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, communityStat
     const simulationRelief = !condition.live ? buildSimulationReliefRoute(activeJourney, affectedLine, departure) : null;
     setRecommendation(simulationRelief || usableLocal);
 
-    if (!hasOneMapToken(credentials)) return () => { cancelled = true; };
+    if (!canUseOneMap(integrations)) return () => { cancelled = true; };
     setRerouteLoading(true);
     fetchOneMapTransitRoutes({
       origin: activeJourney.origin,
       destination: activeJourney.destination,
       departureTime: departure,
-      token: credentials.oneMapToken,
     }).then(routes => {
       if (cancelled || !routes.length) return;
       const preferred = chooseRerouteAlternative(routes, activeJourney, {
@@ -815,7 +784,7 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, communityStat
     }).finally(() => { if (!cancelled) setRerouteLoading(false); });
 
     return () => { cancelled = true; };
-  }, [activeJourney, conditionKey, credentials.oneMapToken, liveState.data, communityState]);
+  }, [activeJourney, conditionKey, integrations.onemap?.status, liveState.data, communityState]);
 
   if (!activeJourney) {
     return (
@@ -901,7 +870,7 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, communityStat
 
       {condition && !actionable && <div className="kept-route"><Info />You chose to keep the current route. PulseRoute is still monitoring it and will surface a new recommendation if conditions change again.</div>}
       <CrowdFeedback route={activeJourney} communityState={communityState} onSubmit={submitCommunityReport} />
-      <RouteDiagram route={activeJourney} credentials={credentials} />
+      <RouteDiagram route={activeJourney} integrations={integrations} />
 
       <section className="demo-controls card-surface">
         <div><span>Hackathon demo controls</span><h2>Normal journey → condition change → proactive multimodal reroute</h2><p>Simulation stays explicitly separate from OneMap and LTA live data. For the strongest guaranteed offline demo, load Bugis → Paya Lebar, then simulate an EWL disruption to reveal the clearly labelled Bus 7 + walking relief scenario.</p></div>
@@ -916,260 +885,47 @@ function JourneyPage({ activeJourney, setActiveJourney, liveState, communityStat
   );
 }
 
-function CredentialStatus({ status }) {
-  const label = {
-    not_configured: 'Not configured',
-    connected: 'Connected',
-    invalid_token: 'Invalid token',
-    expired_token: 'Expired token',
-    invalid_key: 'Invalid key',
-    invalid_config: 'Invalid configuration',
-    unsafe_key: 'Unsafe key',
-    schema_missing: 'Schema not installed',
-    connection_failed: 'Connection failed',
-  }[status.code] || 'Not configured';
-  return <div className={`credential-status ${status.code}`}><span /> <b>{label}</b>{status.detail && <small>{status.detail}</small>}</div>;
-}
-
-function SettingsPage({ credentials, setCredentials, refreshLive, refreshCommunity }) {
-  const [draftOneMap, setDraftOneMap] = useState(credentials.oneMapToken);
-  const [draftLta, setDraftLta] = useState(credentials.ltaDataMallKey);
-  const [draftSupabaseUrl, setDraftSupabaseUrl] = useState(credentials.supabaseUrl);
-  const [draftSupabaseKey, setDraftSupabaseKey] = useState(credentials.supabasePublishableKey);
-  const [draftGemini, setDraftGemini] = useState(credentials.geminiApiKey);
-  const [showOneMap, setShowOneMap] = useState(false);
-  const [showLta, setShowLta] = useState(false);
-  const [showSupabase, setShowSupabase] = useState(false);
-  const [showGemini, setShowGemini] = useState(false);
-  const [oneMapStatus, setOneMapStatus] = useState({ code: 'not_configured', detail: credentials.oneMapToken ? 'Saved for this browser session; test to verify.' : '' });
-  const [ltaStatus, setLtaStatus] = useState({ code: 'not_configured', detail: credentials.ltaDataMallKey ? 'Saved for this browser session; test to verify.' : '' });
-  const [communityStatus, setCommunityStatus] = useState({ code: 'not_configured', detail: hasCommunityStore(credentials) ? 'Saved for this browser session; test to verify.' : '' });
-  const [geminiStatus, setGeminiStatus] = useState({ code: 'not_configured', detail: hasGeminiKey(credentials) ? 'Saved for this browser session; test to verify.' : '' });
-  const [testing, setTesting] = useState('');
-
-  useEffect(() => {
-    setDraftOneMap(credentials.oneMapToken);
-    setDraftLta(credentials.ltaDataMallKey);
-    setDraftSupabaseUrl(credentials.supabaseUrl);
-    setDraftSupabaseKey(credentials.supabasePublishableKey);
-    setDraftGemini(credentials.geminiApiKey);
-  }, [credentials]);
-
-  const persist = next => {
-    const saved = saveApiKeys(next);
-    setCredentials(saved);
-    return saved;
-  };
-
-  const saveOneMap = () => {
-    const next = persist({ ...credentials, oneMapToken: draftOneMap });
-    setDraftOneMap(next.oneMapToken);
-    setOneMapStatus({ code: 'not_configured', detail: next.oneMapToken ? 'Saved for this browser session; test to verify.' : '' });
-  };
-
-  const saveLta = () => {
-    const next = persist({ ...credentials, ltaDataMallKey: draftLta });
-    setDraftLta(next.ltaDataMallKey);
-    setLtaStatus({ code: 'not_configured', detail: next.ltaDataMallKey ? 'Saved for this browser session; test to verify.' : '' });
-  };
-
-  const saveCommunity = () => {
-    const next = persist({ ...credentials, supabaseUrl: draftSupabaseUrl, supabasePublishableKey: draftSupabaseKey });
-    setDraftSupabaseUrl(next.supabaseUrl);
-    setDraftSupabaseKey(next.supabasePublishableKey);
-    setCommunityStatus({ code: 'not_configured', detail: hasCommunityStore(next) ? 'Saved for this browser session; test to verify.' : '' });
-  };
-
-  const saveGemini = () => {
-    const next = persist({ ...credentials, geminiApiKey: draftGemini });
-    setDraftGemini(next.geminiApiKey);
-    setGeminiStatus({ code: 'not_configured', detail: next.geminiApiKey ? 'Saved for this browser session; test to verify.' : '' });
-  };
-
-  const testOneMap = async () => {
-    setTesting('onemap');
-    try {
-      await testOneMapToken(draftOneMap);
-      const expiry = oneMapTokenExpiry(draftOneMap);
-      setOneMapStatus({ code: 'connected', detail: expiry ? `Token works. Expires ${fmtExpiry(expiry)}.` : 'Authenticated OneMap Search request succeeded.' });
-    } catch (error) {
-      const code = error instanceof OneMapRequestError ? error.code : 'connection_failed';
-      setOneMapStatus({ code: ['expired_token', 'invalid_token'].includes(code) ? code : 'connection_failed', detail: error?.message || 'OneMap connection test failed.' });
-    } finally {
-      setTesting('');
-    }
-  };
-
-  const testLta = async () => {
-    setTesting('lta');
-    try {
-      await testLtaDataMallKey(draftLta);
-      setLtaStatus({ code: 'connected', detail: 'Authenticated Train Service Alerts request succeeded. The same Account Key is used opportunistically for Bus Arrival v3 on bus legs.' });
-    } catch (error) {
-      const code = error instanceof DataMallRequestError ? error.code : 'connection_failed';
-      setLtaStatus({ code: code === 'invalid_key' ? 'invalid_key' : 'connection_failed', detail: error?.message || 'LTA DataMall connection test failed.' });
-    } finally {
-      setTesting('');
-    }
-  };
-
-  const testGemini = async () => {
-    setTesting('gemini');
-    try {
-      await testGeminiApiKey(draftGemini);
-      setGeminiStatus({ code: 'connected', detail: `Gemini voice parser is ready with ${GEMINI_VOICE_MODEL}.` });
-    } catch (error) {
-      setGeminiStatus({ code: 'connection_failed', detail: error?.message || 'Gemini connection test failed.' });
-    } finally {
-      setTesting('');
-    }
-  };
-
-  const testCommunity = async () => {
-    setTesting('community');
-    try {
-      const config = {
-        supabaseUrl: draftSupabaseUrl.trim(),
-        supabasePublishableKey: draftSupabaseKey.trim(),
-      };
-      await testCommunityCrowdConnection(config);
-      setCommunityStatus({ code: 'connected', detail: 'Shared crowd_reports table is reachable with the publishable key and RLS policy.' });
-    } catch (error) {
-      const code = error instanceof CommunityCrowdError ? error.code : 'connection_failed';
-      setCommunityStatus({
-        code: ['invalid_key', 'invalid_config', 'unsafe_key', 'schema_missing'].includes(code) ? code : 'connection_failed',
-        detail: error?.message || 'Community crowd connection test failed.',
-      });
-    } finally {
-      setTesting('');
-    }
-  };
-
-  const clearOneMap = () => {
-    setDraftOneMap('');
-    persist({ ...credentials, oneMapToken: '' });
-    setOneMapStatus({ code: 'not_configured', detail: '' });
-  };
-
-  const clearLta = () => {
-    setDraftLta('');
-    persist({ ...credentials, ltaDataMallKey: '' });
-    setLtaStatus({ code: 'not_configured', detail: '' });
-  };
-
-  const clearCommunity = () => {
-    setDraftSupabaseUrl('');
-    setDraftSupabaseKey('');
-    persist({ ...credentials, supabaseUrl: '', supabasePublishableKey: '' });
-    setCommunityStatus({ code: 'not_configured', detail: '' });
-  };
-
-  const clearGemini = () => {
-    setDraftGemini('');
-    persist({ ...credentials, geminiApiKey: '' });
-    setGeminiStatus({ code: 'not_configured', detail: '' });
-  };
-
-  const clearAll = () => {
-    const empty = clearApiKeys();
-    setCredentials(empty);
-    setDraftOneMap('');
-    setDraftLta('');
-    setDraftSupabaseUrl('');
-    setDraftSupabaseKey('');
-    setDraftGemini('');
-    setOneMapStatus({ code: 'not_configured', detail: '' });
-    setLtaStatus({ code: 'not_configured', detail: '' });
-    setCommunityStatus({ code: 'not_configured', detail: '' });
-    setGeminiStatus({ code: 'not_configured', detail: '' });
-  };
-
-  const expiry = oneMapTokenExpiry(draftOneMap);
-  const expiryWarning = draftOneMap && isOneMapTokenExpired(draftOneMap);
-
+function SettingsPage({ integrations, onCheck, checking }) {
+  const services = [
+    ['onemap', 'OneMap', MapPin, 'Multimodal rail, bus and walking routes.'],
+    ['lta', 'LTA DataMall', Database, 'Service alerts, station crowd density and bus arrivals.'],
+    ['gemini', 'Gemini Voice', Sparkles, 'Turn a short voice request into your next journey.'],
+    ['community', 'Community Crowd', MessageCircle, 'Recent crowd reports shared by commuters.'],
+  ];
   return (
     <main className="page-shell settings-page">
-      <PageHeading eyebrow="Browser session configuration" title="Settings" copy="Configure optional OneMap, LTA DataMall, Gemini voice planning and shared Community Crowd connections. PulseRoute still runs with its local MRT model when external services are unavailable." />
-
-      <div className="security-banner"><ShieldCheck /><div><b>Browser-session credentials</b><p>OneMap, LTA, Gemini and optional Supabase settings are stored in <code>sessionStorage</code>. PulseRoute does not hard-code or commit these credentials. For Gemini voice planning, use a Google AI Studio API key and clear it after the demo if this is a shared computer.</p></div></div>
-
-      <section className="settings-grid">
-        <article className="credential-card card-surface">
-          <div className="credential-heading"><div className="credential-icon"><MapPin /></div><div><span>SLA</span><h2>OneMap</h2><p>Used for authenticated OneMap Search and, when direct routing succeeds, multimodal public-transport itineraries with rail, bus and walking legs.</p></div></div>
-          <label className="credential-field">
-            <span>OneMap Access Token</span>
-            <div><input type={showOneMap ? 'text' : 'password'} value={draftOneMap} onChange={event => { setDraftOneMap(event.target.value); setOneMapStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="Paste OneMap access token" autoComplete="off" /><button type="button" onClick={() => setShowOneMap(value => !value)} aria-label={showOneMap ? 'Hide OneMap token' : 'Show OneMap token'}>{showOneMap ? <EyeOff /> : <Eye />}</button></div>
-          </label>
-          {expiry && <div className={`token-expiry ${expiryWarning ? 'expired' : ''}`}><Clock3 />JWT expiry: {fmtExpiry(expiry)}{expiryWarning ? ' — expired' : ''}</div>}
-          <CredentialStatus status={oneMapStatus} />
-          <div className="credential-actions"><button type="button" className="primary-button" onClick={saveOneMap}>Save</button><button type="button" className="secondary-button" onClick={testOneMap} disabled={testing === 'onemap' || !draftOneMap.trim()}>{testing === 'onemap' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearOneMap}>Clear</button></div>
-          <p className="credential-note">OneMap access tokens expire periodically. Generate a new token from your OneMap account when required.</p>
-        </article>
-
-        <article className="credential-card card-surface">
-          <div className="credential-heading"><div className="credential-icon"><Database /></div><div><span>LTA</span><h2>DataMall</h2><p>Used for Train Service Alerts, Station Crowd Density Real Time and optional Bus Arrival v3 data when the browser can reach DataMall directly.</p></div></div>
-          <label className="credential-field">
-            <span>LTA DataMall Account Key</span>
-            <div><input type={showLta ? 'text' : 'password'} value={draftLta} onChange={event => { setDraftLta(event.target.value); setLtaStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="Paste DataMall Account Key" autoComplete="off" /><button type="button" onClick={() => setShowLta(value => !value)} aria-label={showLta ? 'Hide DataMall key' : 'Show DataMall key'}>{showLta ? <EyeOff /> : <Eye />}</button></div>
-          </label>
-          <CredentialStatus status={ltaStatus} />
-          <div className="credential-actions"><button type="button" className="primary-button" onClick={saveLta}>Save</button><button type="button" className="secondary-button" onClick={testLta} disabled={testing === 'lta' || !draftLta.trim()}>{testing === 'lta' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearLta}>Clear</button></div>
-          <p className="credential-note">PulseRoute sends DataMall requests through the local Vite proxy configured in this repository, which avoids browser CORS during <code>npm run dev</code> and <code>npm run preview</code>. Your Account Key still stays in browser sessionStorage and is forwarded only to LTA DataMall.</p>
-        </article>
-
-        <article className="credential-card card-surface">
-          <div className="credential-heading"><div className="credential-icon"><Sparkles /></div><div><span>Google AI</span><h2>Gemini Voice Planning</h2><p>Turns a short microphone request such as “Bring me from Buona Vista to Serangoon” into validated PulseRoute origin and destination fields, then plans the route automatically.</p></div></div>
-          <label className="credential-field">
-            <span>Gemini API Key</span>
-            <div><input type={showGemini ? 'text' : 'password'} value={draftGemini} onChange={event => { setDraftGemini(event.target.value); setGeminiStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="Paste Google AI Studio API key" autoComplete="off" /><button type="button" onClick={() => setShowGemini(value => !value)} aria-label={showGemini ? 'Hide Gemini key' : 'Show Gemini key'}>{showGemini ? <EyeOff /> : <Eye />}</button></div>
-          </label>
-          <CredentialStatus status={geminiStatus} />
-          <div className="credential-actions"><button type="button" className="primary-button" onClick={saveGemini}>Save</button><button type="button" className="secondary-button" onClick={testGemini} disabled={testing === 'gemini' || !draftGemini.trim()}>{testing === 'gemini' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearGemini}>Clear</button></div>
-          <p className="credential-note">Voice audio is forwarded through PulseRoute's local Vite proxy to Gemini <code>{GEMINI_VOICE_MODEL}</code> for one-turn intent extraction. The API key remains in browser sessionStorage and is forwarded only to Google's Gemini API. PulseRoute validates Gemini's station names against its own operational MRT dataset before routing.</p>
-        </article>
-
-        <article className="credential-card card-surface">
-          <div className="credential-heading"><div className="credential-icon"><MessageCircle /></div><div><span>Community</span><h2>Shared Crowd Feedback</h2><p>Optional Supabase Data API storage lets one commuter's traffic-light crowd report inform other PulseRoute users. Without it, reports remain a clearly labelled local demo on this browser.</p></div></div>
-          <label className="credential-field">
-            <span>Supabase Project URL</span>
-            <div><input type="url" value={draftSupabaseUrl} onChange={event => { setDraftSupabaseUrl(event.target.value); setCommunityStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="https://your-project.supabase.co" autoComplete="off" /></div>
-          </label>
-          <label className="credential-field">
-            <span>Supabase Publishable Key</span>
-            <div><input type={showSupabase ? 'text' : 'password'} value={draftSupabaseKey} onChange={event => { setDraftSupabaseKey(event.target.value); setCommunityStatus({ code: 'not_configured', detail: 'Changed but not tested.' }); }} placeholder="sb_publishable_... (legacy anon also supported)" autoComplete="off" /><button type="button" onClick={() => setShowSupabase(value => !value)} aria-label={showSupabase ? 'Hide Supabase key' : 'Show Supabase key'}>{showSupabase ? <EyeOff /> : <Eye />}</button></div>
-          </label>
-          <CredentialStatus status={communityStatus} />
-          <div className="credential-actions"><button type="button" className="primary-button" onClick={saveCommunity}>Save</button><button type="button" className="secondary-button" onClick={testCommunity} disabled={testing === 'community' || !draftSupabaseUrl.trim() || !draftSupabaseKey.trim()}>{testing === 'community' ? <><RefreshCw className="spin" /> Testing</> : 'Test Connection'}</button><button type="button" className="secondary-button danger-outline" onClick={clearCommunity}>Clear</button></div>
-          <p className="credential-note">Run <code>supabase/crowd_reports.sql</code> once in your Supabase SQL Editor. PulseRoute rejects <code>sb_secret_</code> and legacy service_role keys because they must never be exposed in a browser.</p>
-        </article>
+      <PageHeading eyebrow="Settings" title="Cloud Integrations" copy="Your transport services, securely connected through PulseRoute." />
+      <div className="security-banner"><ShieldCheck /><div><b>Managed securely on Google Cloud</b><p>API credentials are stored in Google Secret Manager and are never exposed to the browser.</p></div></div>
+      <section className="settings-grid" aria-live="polite">
+        {services.map(([id, name, Icon, description]) => {
+          const status = integrations[id]?.status;
+          return <article className="credential-card card-surface" key={id}>
+            <div className="credential-heading"><div className="credential-icon"><Icon /></div><div><h2>{name}</h2><p>{description}</p></div></div>
+            <div className={`credential-status ${status === 'Connected' ? 'connected' : 'unavailable'}`}><span /><b>{status || (checking ? 'Checking…' : 'Not checked')}</b></div>
+          </article>;
+        })}
       </section>
-
-      <section className="settings-footer card-surface">
-        <div><Trash2 /><div><h3>Clear all credentials</h3><p>Remove OneMap, DataMall, Gemini and Community Crowd settings from this browser tab/session immediately.</p></div></div>
-        <button type="button" className="secondary-button danger-outline" onClick={clearAll}>Clear all credentials</button>
-      </section>
-
       <section className="settings-help card-surface">
-        <div><Info /><div><h3>Connection behaviour</h3><p><b>OneMap unavailable:</b> local MRT routing remains available. <b>LTA:</b> run PulseRoute through Vite so the local DataMall proxy is active; if LTA is unreachable, official live signals are omitted. <b>Gemini unavailable:</b> typed trip planning still works normally. <b>Community Crowd unavailable:</b> traffic-light reports are kept only on this browser and labelled local demo.</p></div></div>
-        <div className="credential-actions"><button type="button" className="secondary-button" onClick={refreshLive} disabled={!hasLtaKey(credentials)}>Refresh LTA data</button><button type="button" className="secondary-button" onClick={refreshCommunity}>Refresh community</button></div>
+        <div><Info /><div><h3>Integration health</h3><p>Statuses come from real server-side requests. Checks are cached for one minute to protect provider quotas. Local MRT routing, typed planning and simulations remain available during outages.</p></div></div>
+        <button type="button" className="primary-button" onClick={onCheck} disabled={checking}>{checking ? <><RefreshCw className="spin" /> Checking…</> : 'Check integrations'}</button>
       </section>
     </main>
   );
 }
 
-function AboutPage({ liveState, credentials, navigate }) {
+function AboutPage({ liveState, integrations, navigate }) {
   return (
     <main className="page-shell">
       <PageHeading eyebrow="Nebula X Hackathon 2026" title="Why PulseRoute exists" copy="A disruption-aware multimodal commuter companion: plan once, monitor continuously, then switch to a viable rail, bus or walking alternative when conditions change." />
-      <section className="about-hero card-surface"><div><span className="eyebrow">Core idea</span><h2>From fastest-route thinking to resilient alternatives.</h2><p>PulseRoute uses OneMap multimodal itineraries when available, overlays reachable LTA disruption/crowding signals, and can blend recent commuter crowd feedback. Its Balanced prototype can diversify among near-equivalent options so every commuter is not automatically sent to the same fastest path. This is a demand-spreading prototype, not a claim of full Singapore network optimisation.</p></div><div className="architecture"><span>OneMap<br/><small>Rail + bus + walking itineraries</small></span><b>+</b><span>LTA + Community<br/><small>Official + recent crowd signals</small></span><b>→</b><span className="pulse-box">PulseRoute<br/><small>Scoring + journey monitor + rerouting</small></span></div></section>
+      <section className="about-hero card-surface"><div><span className="eyebrow">Core idea</span><h2>From fastest-route thinking to resilient alternatives.</h2><p>PulseRoute uses OneMap multimodal itineraries when available, overlays reachable LTA disruption/crowding signals, and can blend recent commuter crowd feedback. Its Balanced prototype can diversify among near-equivalent options so every commuter is not automatically sent to the same fastest path. This is a demand-spreading prototype, not a claim of full Singapore network optimisation.</p></div><div className="architecture"><span>Browser</span><b>→</b><span className="pulse-box">Cloud Run</span><b>→</b><span>OneMap + LTA + Gemini + Community</span></div></section>
       <div className="about-grid">
         <section className="card-surface"><div className="card-icon"><RouteIcon /></div><h3>Multimodal alternatives</h3><p>OneMap routes are kept as ordered legs, including WALK, BUS and SUBWAY when returned. The local fallback remains deliberately MRT-only rather than inventing bus or walking data.</p></section>
-        <section className="card-surface"><div className="card-icon"><Activity /></div><h3>Live transport signals</h3><p>LTA DataMall Train Service Alerts, Station Crowd Density and eligible Bus Arrival v3 requests are forwarded through PulseRoute's local Vite proxy. This keeps the hackathon demo local while avoiding DataMall browser CORS.</p></section>
+        <section className="card-surface"><div className="card-icon"><Activity /></div><h3>Live transport signals</h3><p>Cloud Run securely connects to LTA DataMall for Train Service Alerts, Station Crowd Density and eligible Bus Arrival v3 requests. Alerts refresh every 60 seconds; crowd readings refresh every five minutes with sequential requests, quota backoff and cached readings.</p></section>
         <section className="card-surface"><div className="card-icon"><Navigation /></div><h3>Proactive My Journey</h3><p>When a live, community-reported or simulated condition changes, PulseRoute favours meaningfully different options: avoid the affected rail line first, then prefer usable bus/walk diversity, lower crowding and reasonable time/walking trade-offs.</p></section>
       </div>
-      <section className="data-transparency card-surface"><div className="section-title"><div><span>Data transparency</span><h2>What is real and what is modelled?</h2></div><Database /></div><div className="transparency-grid"><div><b>OneMap</b><p>Cards labelled “OneMap” came from a successful direct OneMap public-transport response. Bus and walking legs are only shown when present in that response.</p></div><div><b>LTA DataMall — Live</b><p>Only shown after a successful authenticated DataMall request, including live bus arrival/occupancy where available.</p></div><div><b>Community</b><p>Traffic-light reports are recent anonymous commuter submissions. At least three unique recent reports are required before community data can materially affect route scoring.</p></div><div><b>PulseRoute network model / Simulation</b><p>The MRT-only local fallback and hackathon demo routes are clearly labelled. Simulated durations are never presented as official live data.</p></div></div></section>
+      <section className="data-transparency card-surface"><div className="section-title"><div><span>Data transparency</span><h2>What is real and what is modelled?</h2></div><Database /></div><div className="transparency-grid"><div><b>OneMap</b><p>Cards labelled “OneMap” came from a successful OneMap public-transport response through Cloud Run. Bus and walking legs are only shown when present in that response.</p></div><div><b>LTA DataMall — Live</b><p>Only shown after a successful authenticated DataMall request, including live bus arrival/occupancy where available.</p></div><div><b>Community</b><p>Traffic-light reports are recent anonymous commuter submissions. At least three unique recent reports are required before community data can materially affect route scoring.</p></div><div><b>PulseRoute network model / Simulation</b><p>The MRT-only local fallback and hackathon demo routes are clearly labelled. Simulated durations are never presented as official live data.</p></div></div></section>
       <section className="future-stations card-surface"><div className="section-title"><div><span>Network accuracy</span><h2>Not treated as operational yet</h2></div><Info /></div><p>PulseRoute does not route through a future station merely because it appears on a future-system map. These are kept separate until an opening is confirmed:</p><div>{UPCOMING_STATIONS.map(station => <span key={station.code}><b>{station.code}</b> {station.name}<small>{station.note}</small></span>)}</div></section>
-      <ExternalDataNotice credentials={credentials} navigate={navigate} />
+      <ExternalDataNotice integrations={integrations} navigate={navigate} />
       {!liveState.data && liveState.error && <div className="inline-message info"><Info />LTA status: {liveState.error}</div>}
     </main>
   );
@@ -1192,7 +948,15 @@ function App() {
   const [page, setPage] = useState(NAV.some(([id]) => id === hashPage) ? hashPage : 'plan');
   const [activeJourney, setActiveJourney] = useState(loadJourney);
   const [demoCondition, setDemoCondition] = useState({ type: 'normal', id: 'initial-normal' });
-  const [credentials, setCredentials] = useState(loadApiKeys);
+  const [integrations, setIntegrations] = useState(loadIntegrations);
+  const [checkingIntegrations, setCheckingIntegrations] = useState(false);
+  const checkCloudIntegrations = useCallback(async () => {
+    setCheckingIntegrations(true);
+    try { setIntegrations(await checkIntegrations()); }
+    finally { setCheckingIntegrations(false); }
+  }, []);
+
+  useEffect(() => { checkCloudIntegrations(); }, [checkCloudIntegrations]);
   const [liveState, setLiveState] = useState({ data: null, error: '', reason: '', loading: false, crowdLoading: false });
   const crowdScheduleRef = useRef({ lastAttemptAt: 0, consecutiveRateLimits: 0, nextAllowedAt: 0, inFlight: false });
   const [communityState, setCommunityState] = useState({ configured: false, mode: 'local', source: 'Community demo — this browser', reports: [], aggregates: [], fetchedAt: '', error: '', reason: '', loading: false });
@@ -1205,19 +969,18 @@ function App() {
 
   const refreshCommunity = useCallback(async () => {
     setCommunityState(state => ({ ...state, loading: true }));
-    const data = await fetchCommunityCrowd(credentials);
+    const data = await fetchCommunityCrowd();
     setCommunityState({ ...data, loading: false });
     return data;
-  }, [credentials.supabaseUrl, credentials.supabasePublishableKey]);
+  }, []);
 
   const submitCommunityReport = useCallback(async report => {
-    const result = await submitCrowdReport(report, credentials);
+    const result = await submitCrowdReport(report);
     await refreshCommunity();
     return result;
-  }, [credentials, refreshCommunity]);
+  }, [refreshCommunity]);
 
   const refreshCrowd = useCallback(async () => {
-    if (!hasLtaKey(credentials)) return { skipped: true, reason: 'not_configured' };
     const schedule = crowdScheduleRef.current;
     const now = Date.now();
     const dueAt = Math.max(schedule.lastAttemptAt + CROWD_REFRESH_MS, schedule.nextAllowedAt);
@@ -1228,7 +991,7 @@ function App() {
     setLiveState(state => ({ ...state, crowdLoading: true }));
 
     try {
-      const result = await fetchCrowdDensity(credentials.ltaDataMallKey);
+      const result = await fetchCrowdDensity();
       const status = { ...result.status };
 
       if (status.state === 'rate_limited') {
@@ -1288,18 +1051,12 @@ function App() {
     } finally {
       schedule.inFlight = false;
     }
-  }, [credentials.ltaDataMallKey]);
+  }, []);
 
   const refreshLive = useCallback(async () => {
-    if (!hasLtaKey(credentials)) {
-      crowdScheduleRef.current = { lastAttemptAt: 0, consecutiveRateLimits: 0, nextAllowedAt: 0, inFlight: false };
-      setLiveState({ data: null, error: 'LTA DataMall Account Key is not configured. Add it in Settings to attempt live transport data.', reason: 'not_configured', loading: false, crowdLoading: false });
-      return;
-    }
-
     setLiveState(state => ({ ...state, loading: true }));
     try {
-      const alertsResult = await fetchTrainServiceAlerts(credentials.ltaDataMallKey);
+      const alertsResult = await fetchTrainServiceAlerts();
       setLiveState(state => ({
         ...state,
         data: {
@@ -1320,12 +1077,12 @@ function App() {
       setLiveState(state => ({
         ...state,
         data: state.data,
-        error: error?.message || 'LTA DataMall could not be reached through the local proxy.',
+        error: error?.message || 'The LTA cloud integration is unavailable.',
         reason,
         loading: false,
       }));
     }
-  }, [credentials.ltaDataMallKey, refreshCrowd]);
+  }, [refreshCrowd]);
 
   useEffect(() => {
     const onHash = () => {
@@ -1341,7 +1098,7 @@ function App() {
     refreshLive();
     const timer = window.setInterval(refreshLive, 60_000);
     return () => window.clearInterval(timer);
-  }, [refreshLive, credentials.ltaDataMallKey]);
+  }, [refreshLive]);
 
   useEffect(() => {
     refreshCommunity();
@@ -1357,11 +1114,11 @@ function App() {
   return (
     <div className="app-root">
       <TopBar page={page} navigate={navigate} liveState={liveState} />
-      {page === 'plan' && <PlanPage liveState={liveState} communityState={communityState} activeJourney={activeJourney} setActiveJourney={setActiveJourney} navigate={navigate} credentials={credentials} />}
-      {page === 'live' && <LivePage liveState={liveState} communityState={communityState} refreshLive={refreshLive} credentials={credentials} navigate={navigate} />}
-      {page === 'journey' && <JourneyPage activeJourney={activeJourney} setActiveJourney={setActiveJourney} liveState={liveState} communityState={communityState} submitCommunityReport={submitCommunityReport} demoCondition={demoCondition} setDemoCondition={setDemoCondition} navigate={navigate} credentials={credentials} />}
-      {page === 'about' && <AboutPage liveState={liveState} credentials={credentials} navigate={navigate} />}
-      {page === 'settings' && <SettingsPage credentials={credentials} setCredentials={setCredentials} refreshLive={refreshLive} refreshCommunity={refreshCommunity} />}
+      {page === 'plan' && <PlanPage liveState={liveState} communityState={communityState} activeJourney={activeJourney} setActiveJourney={setActiveJourney} navigate={navigate} integrations={integrations} />}
+      {page === 'live' && <LivePage liveState={liveState} communityState={communityState} refreshLive={refreshLive} integrations={integrations} navigate={navigate} />}
+      {page === 'journey' && <JourneyPage activeJourney={activeJourney} setActiveJourney={setActiveJourney} liveState={liveState} communityState={communityState} submitCommunityReport={submitCommunityReport} demoCondition={demoCondition} setDemoCondition={setDemoCondition} navigate={navigate} integrations={integrations} />}
+      {page === 'about' && <AboutPage liveState={liveState} integrations={integrations} navigate={navigate} />}
+      {page === 'settings' && <SettingsPage integrations={integrations} onCheck={checkCloudIntegrations} checking={checkingIntegrations} />}
     </div>
   );
 }

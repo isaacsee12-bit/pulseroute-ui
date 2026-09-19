@@ -28,67 +28,21 @@ function safeJsonParse(value, fallback) {
   }
 }
 
-function decodeLegacyJwtRole(key) {
-  const parts = String(key || '').split('.');
-  if (parts.length !== 3 || typeof atob === 'undefined') return '';
-  try {
-    const normalised = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalised + '='.repeat((4 - normalised.length % 4) % 4);
-    return JSON.parse(atob(padded))?.role || '';
-  } catch {
-    return '';
-  }
-}
-
-function assertSafePublicKey(key) {
-  const value = String(key || '').trim();
-  if (!value) throw new CommunityCrowdError('Supabase Publishable Key is not configured.', 'not_configured');
-  if (value.startsWith('sb_secret_') || decodeLegacyJwtRole(value) === 'service_role') {
-    throw new CommunityCrowdError('Do not use a Supabase secret/service_role key in PulseRoute. Use a publishable key (or legacy anon key).', 'unsafe_key');
-  }
-  return value;
-}
-
-function normaliseProjectUrl(value) {
-  const raw = String(value || '').trim().replace(/\/+$/, '');
-  if (!raw) throw new CommunityCrowdError('Supabase Project URL is not configured.', 'not_configured');
-  let url;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new CommunityCrowdError('Enter a valid Supabase Project URL.', 'invalid_config');
-  }
-  if (!['https:', 'http:'].includes(url.protocol)) {
-    throw new CommunityCrowdError('Supabase Project URL must use HTTP or HTTPS.', 'invalid_config');
-  }
-  return url.toString().replace(/\/$/, '');
-}
-
-function publicHeaders(key, extras = {}) {
-  return {
-    apikey: assertSafePublicKey(key),
-    Accept: 'application/json',
-    ...extras,
-  };
-}
-
-async function supabaseRequest(config, tablePath, options = {}) {
-  const base = normaliseProjectUrl(config?.supabaseUrl);
-  const key = config?.supabasePublishableKey;
+async function communityRequest(options = {}) {
   let response;
   try {
-    response = await fetch(`${base}/rest/v1/${tablePath}`, {
+    response = await fetch('/api/community/reports', {
       ...options,
       headers: {
-        ...publicHeaders(key),
+        Accept: 'application/json',
         ...(options.headers || {}),
       },
       cache: 'no-store',
     });
   } catch {
     throw new CommunityCrowdError(
-      'The browser could not reach the shared crowd service. PulseRoute can still keep crowd feedback locally on this device.',
-      'cors_or_network',
+      'The shared crowd cloud integration is unavailable. PulseRoute can still keep crowd feedback locally on this device.',
+      'connection_failed',
     );
   }
 
@@ -100,7 +54,7 @@ async function supabaseRequest(config, tablePath, options = {}) {
       ? 'schema_missing'
       : response.status === 401 || response.status === 403
         ? 'invalid_key'
-        : response.status === 409
+        : response.status === 409 || response.status === 429
           ? 'rate_limited'
           : 'connection_failed';
     throw new CommunityCrowdError(message, code, response.status);
@@ -185,37 +139,19 @@ export function saveLocalCrowdReport(input) {
   return stored;
 }
 
-export async function testCommunityCrowdConnection(config) {
-  await supabaseRequest(config, 'crowd_reports?select=id&limit=1', { method: 'GET' });
-  return { ok: true };
-}
-
-export async function fetchSharedCrowdReports(config, minutes = 30) {
-  const since = new Date(Date.now() - Math.max(1, minutes) * 60 * 1000).toISOString();
-  const params = new URLSearchParams({
-    select: 'id,station,station_code,line,crowd_level,crowd_value,client_tag,reported_at',
-    reported_at: `gte.${since}`,
-    order: 'reported_at.desc',
-    limit: '1000',
-  });
-  const payload = await supabaseRequest(config, `crowd_reports?${params.toString()}`, { method: 'GET' });
+export async function fetchSharedCrowdReports() {
+  const payload = await communityRequest({ method: 'GET' });
   return Array.isArray(payload) ? payload : [];
 }
 
-export async function submitCrowdReport(input, config) {
+export async function submitCrowdReport(input) {
   const report = createReport(input);
-  const configured = Boolean(String(config?.supabaseUrl || '').trim() && String(config?.supabasePublishableKey || '').trim());
-
-  if (!configured) {
-    return { report: saveLocalCrowdReport(input), shared: false, mode: 'local' };
-  }
 
   try {
-    const payload = await supabaseRequest(config, 'crowd_reports', {
+    const payload = await communityRequest({
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Prefer: 'return=representation',
       },
       body: JSON.stringify(report),
     });
@@ -305,24 +241,11 @@ export function aggregateCommunityReports(reports, now = Date.now()) {
   }).sort((a, b) => b.score - a.score || b.reportCount - a.reportCount);
 }
 
-export async function fetchCommunityCrowd(config) {
-  const configured = Boolean(String(config?.supabaseUrl || '').trim() && String(config?.supabasePublishableKey || '').trim());
+export async function fetchCommunityCrowd() {
   const localReports = readLocalReports();
 
-  if (!configured) {
-    return {
-      configured: false,
-      mode: 'local',
-      source: 'Community demo — this browser',
-      reports: localReports,
-      aggregates: aggregateCommunityReports(localReports),
-      fetchedAt: new Date().toISOString(),
-      error: '',
-    };
-  }
-
   try {
-    const reports = await fetchSharedCrowdReports(config);
+    const reports = await fetchSharedCrowdReports();
     return {
       configured: true,
       mode: 'shared',

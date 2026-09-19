@@ -1,5 +1,5 @@
-const ONEMAP_SEARCH_URL = 'https://www.onemap.gov.sg/api/common/elastic/search';
-const ONEMAP_ROUTE_URL = 'https://www.onemap.gov.sg/api/public/routingsvc/route';
+const ONEMAP_SEARCH_URL = '/api/onemap/search';
+const ONEMAP_ROUTE_URL = '/api/onemap/route';
 
 const RAIL_LINES = {
   NS: { code: 'NSL', name: 'North-South Line' },
@@ -27,28 +27,17 @@ function classifyOneMapError(message, status) {
   return 'connection_failed';
 }
 
-function authHeaders(token) {
-  return {
-    Authorization: String(token || '').trim(),
-    Accept: 'application/json',
-  };
-}
-
-async function fetchJson(url, token) {
-  if (!String(token || '').trim()) {
-    throw new OneMapRequestError('OneMap Access Token is not configured.', 'not_configured');
-  }
-
+async function fetchJson(url) {
   let response;
   try {
     response = await fetch(url, {
       method: 'GET',
-      headers: authHeaders(token),
+      headers: { Accept: 'application/json' },
       cache: 'no-store',
     });
   } catch {
     throw new OneMapRequestError(
-      'The browser could not reach OneMap directly. This can be caused by CORS, a network policy, or a temporary OneMap outage.',
+      'The OneMap cloud integration could not be reached. Local MRT routing is still available.',
       'connection_failed',
     );
   }
@@ -62,22 +51,14 @@ async function fetchJson(url, token) {
   return payload;
 }
 
-export async function searchOneMap(searchVal, token, pageNum = 1) {
+export async function searchOneMap(searchVal, pageNum = 1) {
   const params = new URLSearchParams({
     searchVal: String(searchVal || '').trim(),
     returnGeom: 'Y',
     getAddrDetails: 'Y',
     pageNum: String(pageNum),
   });
-  return fetchJson(`${ONEMAP_SEARCH_URL}?${params.toString()}`, token);
-}
-
-export async function testOneMapToken(token) {
-  const payload = await searchOneMap('Tampines MRT Station', token, 1);
-  if (!Array.isArray(payload?.results)) {
-    throw new OneMapRequestError('OneMap returned an unexpected Search response.', 'connection_failed');
-  }
-  return { ok: true, resultCount: payload.results.length };
+  return fetchJson(`${ONEMAP_SEARCH_URL}?${params.toString()}`);
 }
 
 function stationSearchScore(result, stationName) {
@@ -92,8 +73,8 @@ function stationSearchScore(result, stationName) {
   return score;
 }
 
-export async function resolveMrtStationWithOneMap(stationName, token) {
-  const payload = await searchOneMap(`${stationName} MRT Station`, token, 1);
+export async function resolveMrtStationWithOneMap(stationName) {
+  const payload = await searchOneMap(`${stationName} MRT Station`);
   const results = Array.isArray(payload?.results) ? payload.results : [];
   if (!results.length) {
     throw new OneMapRequestError(`OneMap Search could not resolve ${stationName} MRT Station.`, 'not_found');
@@ -299,10 +280,10 @@ export function normaliseOneMapItinerary(itinerary, index, origin, destination) 
   };
 }
 
-export async function fetchOneMapTransitRoutes({ origin, destination, departureTime, token }) {
+export async function fetchOneMapTransitRoutes({ origin, destination, departureTime }) {
   const [start, end] = await Promise.all([
-    resolveMrtStationWithOneMap(origin, token),
-    resolveMrtStationWithOneMap(destination, token),
+    resolveMrtStationWithOneMap(origin),
+    resolveMrtStationWithOneMap(destination),
   ]);
   const departure = oneMapDepartureParameters(departureTime);
   const params = new URLSearchParams({
@@ -318,7 +299,7 @@ export async function fetchOneMapTransitRoutes({ origin, destination, departureT
     showIntermediateStops: 'true',
   });
 
-  const payload = await fetchJson(`${ONEMAP_ROUTE_URL}?${params.toString()}`, token);
+  const payload = await fetchJson(`${ONEMAP_ROUTE_URL}?${params.toString()}`);
   const itineraries = Array.isArray(payload?.plan?.itineraries) ? payload.plan.itineraries : [];
   return itineraries.map((itinerary, itineraryIndex) => normaliseOneMapItinerary(itinerary, itineraryIndex, origin, destination));
 }

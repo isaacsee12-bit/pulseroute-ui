@@ -1,320 +1,148 @@
 # PulseRoute
 
-PulseRoute is a Nebula X Hackathon 2026 prototype for disruption-aware, multimodal Singapore public-transport decision support. Its core idea is that a disruption tool should not automatically push every commuter onto the same nominally fastest alternative. PulseRoute compares viable rail, bus and walking itineraries, explains the trade-off, and can diversify near-equivalent recommendations in **Balanced** mode.
-
-PulseRoute does **not** claim to optimise the whole Singapore transport network. The hackathon prototype demonstrates how commuter-level recommendations can be designed to spread demand across viable alternatives while remaining transparent about data sources and fallbacks.
+PulseRoute is a Nebula X Hackathon 2026 prototype for disruption-aware, multimodal Singapore public-transport journeys. The existing React/Vite interface, route scoring, My Journey monitor, simulations and local MRT fallback are served by a small Node/Express backend.
 
 ## Architecture
 
-PulseRoute is a React + Vite application with no cloud backend requirement.
+**Browser → Cloud Run → OneMap + LTA + Gemini + Community**
 
-There is:
+Cloud Run serves `dist/` and the same-origin `/api/*` endpoints. Only the backend contacts providers. Its attached `pulseroute-runner` service account reads these five values from Google Secret Manager:
 
-- no Vercel requirement;
-- no serverless `/api` layer;
-- no environment-variable setup;
-- no Google Maps API dependency;
-- a **local Vite development/preview proxy** for LTA DataMall, because DataMall's browser CORS policy blocks the direct frontend request.
+- `ONEMAP_ACCESS_TOKEN`
+- `LTA_ACCOUNT_KEY`
+- `GEMINI_API_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
 
-Optional credentials are entered through **Settings** and stored in browser `sessionStorage` for the current session only.
+Values are never build arguments, browser configuration, response headers, or frontend environment variables. They are fetched at runtime with Application Default Credentials and cached in server memory for five minutes. New secret versions are picked up after that cache expires. Provider errors are replaced with safe messages; response data is redacted against loaded secret values. Request bodies, credential values and upstream errors are not logged.
 
-The data/routing stack is:
+Settings is a **Cloud Integrations** dashboard with one **Check integrations** button. The backend makes real requests and returns **Connected**, **Unavailable**, **Misconfigured**, or **Rate limited**. Merely having a secret does not count as connected. Checks are cached for 60 seconds and concurrent checks share one request. OneMap checks public-transport routing; LTA checks alerts and active crowd quota backoff; Gemini performs a minimal inference; Community reads the `crowd_reports` table. Community's read check does not insert a synthetic report or guarantee that a missing INSERT policy will succeed.
 
-1. **SLA OneMap** — authenticated Search and public-transport routing. Successful itineraries can contain ordered `WALK`, `BUS` and `SUBWAY` legs.
-2. **LTA DataMall** — Train Service Alerts, Station Crowd Density Real Time, and optional Bus Arrival v3, forwarded through the local Vite proxy so browser CORS does not block the hackathon demo.
-3. **PulseRoute network model** — the always-available, MRT-only local routing fallback.
-4. **Gemini Voice Planning** — optional audio intent extraction for origin/destination entry; PulseRoute still validates and routes locally/through OneMap.
-5. **Community Crowd** — optional shared traffic-light crowd reports using Supabase Data REST with Row Level Security.
-6. **Simulation** — clearly labelled hackathon scenarios used only to demonstrate proactive rerouting when external APIs are unavailable.
+## Local development
 
-## Run locally
+Use Node.js 22.9+ and the Google Cloud CLI. All integration values remain in Secret Manager, including during local development.
 
-```bash
-npm install
-npm run dev
-```
+1. Sign in and select the intended project:
 
-Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
+   ```powershell
+   gcloud auth login
+   gcloud config set project YOUR_PROJECT_ID
+   gcloud auth application-default login
+   ```
 
-Production check:
+2. Grant your development identity access to the five secrets, or use an identity that already has access. Do not download a service-account key file.
+3. Optionally copy `.env.example` to `.env.local` and set **only** the project ID and local port. `.env.local` is ignored by Git and excluded from cloud/container builds. Do not put integration values or `VITE_*` credentials there.
+4. Run:
 
-```bash
+   ```powershell
+   npm install
+   npm run dev
+   ```
+
+Open `http://localhost:5173`. Express hosts the API and Vite development middleware on one origin; there is no provider proxy in Vite configuration. Without Cloud authentication, local MRT routing, typed planning and simulations still work; external integrations report their actual unavailable/misconfigured state.
+
+Production preview:
+
+```powershell
 npm run build
+npm run preview
 ```
 
-No Vercel CLI, `.env.local`, cloud function, worker, or hosted backend is required. For live LTA data, run the app with Vite (`npm run dev` or `npm run preview`) so the local DataMall proxy is available.
+Open `http://localhost:8080` unless `PORT` is configured.
 
-## Gemini voice trip planning
+## Google Cloud deployment
 
-The **Plan a Trip** screen includes a **Plan with voice** control. PulseRoute records a short microphone request (maximum 10 seconds), forwards the audio through the local Vite proxy to Gemini, and asks only for a structured trip intent:
+Current deployment: **https://pulseroute-320189741042.asia-southeast1.run.app** in project `qwiklabs-gcp-01-5ca1d6f699f2`.
 
-```json
-{
-  "transcript": "Bring me from Buona Vista to Serangoon",
-  "origin": "Buona Vista",
-  "destination": "Serangoon"
-}
+OneMap, LTA DataMall and Gemini were verified with live requests. Both Supabase secret resources exist but have no versions because a Supabase project has not been set up yet; Community Crowd correctly shows **Misconfigured** and uses the local reporting fallback. To enable shared reporting later, run `supabase/crowd_reports.sql` in your Supabase project and populate the two corresponding secrets.
+
+First verify the selected project and active account:
+
+```powershell
+gcloud config get-value project
+gcloud auth list
+gcloud projects describe YOUR_PROJECT_ID
 ```
 
-The implementation uses `gemini-3.5-flash-lite`, which supports audio input and structured text output. Gemini does **not** calculate the route. PulseRoute validates the returned station names against its own operational MRT dataset, fills the existing origin/destination fields, and then runs the normal PulseRoute route planner.
+If no project is selected, select the intended project before creating resources. The deployment uses a public Cloud Run service named `pulseroute` in **asia-southeast1**, with **1 CPU, 512Mi RAM, min 0, max 2** instances.
 
-Setup:
+```powershell
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com --project=YOUR_PROJECT_ID
+gcloud iam service-accounts create pulseroute-runner --display-name="PulseRoute Cloud Run" --project=YOUR_PROJECT_ID
+```
 
-1. Open **Settings → Gemini Voice Planning**.
-2. Paste a Google AI Studio Gemini API key.
-3. Click **Save**, then **Test Connection**.
-4. Return to **Plan a Trip** and click **Plan with voice**.
-5. Allow microphone access and say a request such as: “Bring me from Buona Vista to Serangoon.”
-6. Click **Stop & plan**, or wait for the 10-second auto-stop.
+Create each of the five named secrets with `gcloud secrets create SECRET_NAME --replication-policy=automatic --project=YOUR_PROJECT_ID`. Grant the runtime account access **on each secret**, rather than project-wide:
 
-The Gemini key is stored only in browser `sessionStorage`; it is not hard-coded or committed to this repository. The browser sends the request to the same-origin `/gemini-proxy` path, and Vite forwards it to the fixed Google Gemini API host.
+```powershell
+gcloud secrets add-iam-policy-binding SECRET_NAME --member="serviceAccount:pulseroute-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com" --role=roles/secretmanager.secretAccessor --project=YOUR_PROJECT_ID
+```
 
-## Configure optional official data
+Enter values using the masked interactive helper in your own terminal:
 
-1. Open **Settings**.
-2. Paste a **OneMap Access Token**.
-3. Click **Save**, then **Test Connection**.
-4. Paste your **LTA DataMall Account Key**.
-5. Click **Save**, then **Test Connection**.
-6. Return to **Plan a Trip**.
+```powershell
+npm run cloud:secrets -- -Project YOUR_PROJECT_ID
+```
 
-A connection is only shown as connected after a real authenticated request succeeds.
+The helper passes values to `gcloud secrets versions add --data-file=-` through stdin. Values never appear in command arguments, files or Git. It requires permission to add versions. Re-run it to rotate values, including expired OneMap tokens.
 
-### OneMap
+For Community Crowd, run `supabase/crowd_reports.sql` once in the Supabase SQL Editor. Store the project's HTTPS `*.supabase.co` URL and publishable key in the corresponding secrets. The backend uses the publishable key and preserves RLS; it rejects secret/service-role keys.
 
-Official resources:
+Deploy the production multi-stage Dockerfile using Cloud Build:
 
-- Register: https://www.onemap.gov.sg/apidocs/register
-- Authentication/token documentation: https://www.onemap.gov.sg/apidocs/authentication
-- Search: https://www.onemap.gov.sg/apidocs/search
-- Official workshop/resources: https://www.onemap.gov.sg/apidocs/docs/workshopmay2025
+```powershell
+gcloud run deploy pulseroute --source=. --project=YOUR_PROJECT_ID --region=asia-southeast1 --service-account=pulseroute-runner@YOUR_PROJECT_ID.iam.gserviceaccount.com --set-env-vars=GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=20 --timeout=60 --allow-unauthenticated --quiet
+gcloud run services describe pulseroute --project=YOUR_PROJECT_ID --region=asia-southeast1 --format="value(status.url)"
+```
 
-Generate the temporary `access_token` outside PulseRoute using your registered OneMap account. Paste **only the access token** into Settings; never paste your OneMap password into PulseRoute.
+The deployer needs Cloud Run deployment, build submission and service-account act-as permissions. The Cloud Build identity may need `roles/run.builder` for source deployment; grant it to the actual build identity reported by your project, not the runtime account. The runtime account only needs the five secret-level accessor grants. Source deployment creates/uses the regional `cloud-run-source-deploy` Artifact Registry repository. Cloud Run supplies HTTPS and its `PORT` automatically.
 
-Current OneMap authentication documentation says tokens are valid for **3 days**. PulseRoute reads a JWT expiry locally where available, but **Test Connection** still performs a real authenticated Search request before reporting success.
+## Preserved features
 
 ### OneMap multimodal routing
 
-PulseRoute resolves the selected MRT stations using OneMap Search, then calls OneMap's public-transport routing endpoint:
+OneMap Search resolves MRT stations; public-transport routing returns ordered walking, bus and rail legs, durations, transfers, distances, fares and stop codes where available. No bus services or geometry are invented. Failed/empty OneMap routing keeps the MRT-only local network fallback. OneMap tokens expire and must be rotated in Secret Manager.
 
-```text
-https://www.onemap.gov.sg/api/public/routingsvc/route
-```
+### LTA live data and quotas
 
-The implementation follows the current official OneMap workshop pattern for public transport (`routeType=pt`, departure `date`/`time`, `mode=TRANSIT`, walking limit and multiple itineraries). The official workshop response demonstrates ordered public-transport legs and fields including itinerary duration, walking time/distance, transfers, fare, leg mode, route names, stop codes, intermediate stops and leg duration.
+- Train Service Alerts refresh every **60 seconds**.
+- Eight `PCDRealTime` line requests refresh every **five minutes**, **sequentially**, with a small gap.
+- Quota failures stop the remaining line calls and back off **10, 20, then 30 minutes**.
+- Successful crowd snapshots are merged with prior readings; partial failures never clear older successful lines.
+- Manual refresh respects the crowd cadence/backoff. The UI distinguishes rate limiting from empty readings.
+- The server also coalesces/caches alert and bus-arrival requests, queues crowd calls across browsers, and enforces crowd backoff. These server caches are **per instance**; with max 2 instances, they are not a globally shared quota coordinator. They reset on instance replacement. Each open browser retains its last successful crowd snapshot.
+- Bus Arrival v3 remains available on eligible bus legs, with `SEA` / `SDA` / `LSD` occupancy and `Arr` / minutes displays.
 
-PulseRoute only displays fields that actually exist in the returned response. It does not invent bus services, stop codes, times, distances or geometry.
+### Gemini voice planning
 
-When OneMap succeeds, route cards and route detail can show:
+**Plan with voice** records up to ten seconds. Audio is sent to `/api/gemini/voice`; the backend supplies the fixed prompt, operational station list, output schema and `gemini-3.5-flash-lite` model. Gemini extracts transcript, origin and destination; it does not calculate routes. Station names are validated before normal trip planning. Typed planning works during Gemini outages. The public backend bounds audio size and applies aggregate per-instance request limits.
 
-- total journey duration;
-- walking time and OneMap walking distance;
-- transfer count;
-- bus service numbers;
-- MRT line names/codes;
-- ordered walking, bus and train legs;
-- leg duration/distance where returned;
-- headsign/stop count where returned;
-- departure/arrival information where returned.
+### Community crowd feedback
 
-If OneMap is unavailable, rejects the token, returns no itinerary, or cannot be reached by the browser, PulseRoute immediately keeps the **MRT-only local network model** route.
+Green (empty), yellow (slightly crowded), and red (very crowded) reports are stored through the backend in Supabase. Server-side validation sets station names, crowd values, timestamps and five-minute report buckets; the existing SQL grants only SELECT/INSERT with RLS. An anonymous client identifier supports one report per station/line/bucket, not authenticated anti-fraud protection.
 
-## Recommendation scoring
+Reports decay over 30 minutes. At least three recent unique-client reports are required to materially influence route scoring; eight or more means high confidence. During a shared-service outage, local reports remain explicitly labelled **Community demo — this browser**.
 
-The five commuter preferences remain:
+### Route preferences and My Journey
 
-- **Balanced** — combines travel time, transfers, walking, live crowding and disruption exposure. Near-equivalent viable routes can be distributed by a stable browser-session bucket so the prototype does not automatically send every session to the exact same route.
-- **Fastest** — prioritises travel time most strongly.
-- **Less crowded** — strongly penalises High/Moderate LTA crowd readings when available.
-- **Fewer transfers** — strongly penalises transfers.
-- **Less walking** — strongly penalises walking minutes.
+Balanced, Fastest, Less crowded, Fewer transfers and Less walking remain unchanged. Balanced distributes near-equivalent options using a stable session bucket. Disruptions penalise affected lines; rerouting prefers viable, meaningfully different rail/bus/walking alternatives with clear trade-offs.
 
-A route exposed to an active disruption receives a large penalty. Recommendation explanations are deterministic and generated from the route/LTA inputs; PulseRoute does not use an LLM for this.
+For the offline demo, open **My Journey → Load multimodal demo → Simulate disruption**. Bugis → Paya Lebar reveals the labelled **Walk → Bus 7 → Walk** relief scenario. Simulation times are illustrative, and actual OneMap alternatives take precedence when available. Future stations remain separate from the operational network.
 
-## My Journey disruption rerouting
+## Verification
 
-When My Journey sees a simulated or reachable live condition change, it looks for a route that is meaningfully different from the active journey.
-
-For disruptions it prioritises:
-
-1. avoiding the affected MRT line;
-2. meaningfully different transport modes;
-3. bus alternatives returned by OneMap;
-4. reasonable walking connections;
-5. lower crowding when available;
-6. reasonable time/transfer/walking trade-offs.
-
-If OneMap cannot supply an alternative, the local MRT reroute remains available. A dedicated **Simulation** scenario is also available for the hackathon demo and never masquerades as OneMap/LTA data.
-
-### Guaranteed offline multimodal demo
-
-In **My Journey**, choose **Load multimodal demo**, then **Simulate disruption**.
-
-The demonstration journey is **Bugis → Paya Lebar** on the EWL. The simulated relief option is:
-
-```text
-Walk → Bus 7 → Walk
-```
-
-The demo uses the real Bus 7 corridor and real bus-stop codes `01112` (Opp Bugis Stn Exit C) and `82011` (Aft Paya Lebar Quarter), but the walking and travel durations are intentionally illustrative and the route is prominently labelled **Simulation**.
-
-If a valid OneMap token is available and OneMap returns a suitable real multimodal alternative, that real OneMap alternative takes precedence.
-
-## LTA DataMall
-
-Official resources:
-
-- DataMall: https://datamall.lta.gov.sg/content/datamall/en.html
-- Request API access: https://datamall.lta.gov.sg/content/datamall/en/request-for-api.html
-- Current API User Guide: https://datamall.lta.gov.sg/content/dam/datamall/datasets/LTA_DataMall_API_User_Guide.pdf
-
-PulseRoute sends the configured Account Key in the documented `AccountKey` HTTP request header.
-
-It currently attempts:
-
-- `TrainServiceAlerts`
-- `PCDRealTime?TrainLine=<line>`
-- `v3/BusArrival?BusStopCode=<code>&ServiceNo=<service>` for eligible bus legs
-
-The current DataMall v6.9 guide (3 Aug 2026) documents Bus Arrival v3 at:
-
-```text
-https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival
-```
-
-Bus Arrival occupancy codes are displayed using the official meanings:
-
-- `SEA` → **Seats available**
-- `SDA` → **Standing available**
-- `LSD` → **Limited standing**
-
-Next-bus time is rounded down to whole minutes; under one minute is displayed as **Arr**, matching LTA's frontend guidance.
-
-### Local Vite proxy for browser CORS
-
-A direct browser request to DataMall can be blocked by CORS because the request uses the custom `AccountKey` header. The Account Key itself can still be valid, as verified from PowerShell/Postman.
-
-PulseRoute now solves this **locally** through Vite:
-
-```text
-Browser (localhost:5173)
-        ↓ same-origin /lta-proxy
-Vite local proxy
-        ↓ server-side HTTPS
-LTA DataMall
-```
-
-The browser still reads the Account Key from PulseRoute Settings/sessionStorage. It sends that key only to the same-origin local Vite proxy, which forwards it to the fixed DataMall host.
-
-This means:
-
-- `npm run dev` → live DataMall requests can work without browser CORS;
-- `npm run preview` → the same local proxy is configured;
-- `npm run build` → still produces a normal static Vite build;
-- opening/deploying only the static files **without a compatible proxy** cannot provide DataMall live data.
-
-No LTA key is hard-coded, committed, or placed in an environment variable.
-
-## Community crowd feedback
-
-PulseRoute now supports commuter-submitted MRT crowd feedback using traffic-light levels:
-
-- 🟢 **Green — Empty**
-- 🟡 **Yellow — Slightly crowded**
-- 🔴 **Red — Very crowded**
-
-Reports are time-sensitive. The browser weights reports most strongly in the first 5 minutes, then progressively down-weights them, and ignores them after 30 minutes. Only the latest recent report from each anonymous browser identifier counts for a station/line aggregate.
-
-For route scoring, one or two reports are shown as useful context but are treated as **limited reports**. At least three recent unique-browser reports are required before community crowding can materially affect PulseRoute route scoring. Eight or more recent reports are labelled high confidence.
-
-### Shared feedback with Supabase
-
-The app remains frontend-only. Shared crowd reports use Supabase's browser-accessible Data REST API; no PulseRoute backend or serverless function is required.
-
-1. Create a Supabase project: https://supabase.com/dashboard
-2. Open the project's SQL Editor.
-3. Run the bundled `supabase/crowd_reports.sql`.
-4. In the Supabase project **Connect** dialog, copy the **Project URL** and **Publishable Key**.
-5. In PulseRoute, open **Settings → Shared Crowd Feedback**.
-6. Paste the Project URL and Publishable Key.
-7. Click **Save**, then **Test Connection**.
-
-Current Supabase guidance recommends a **publishable key** for browser applications. Legacy `anon` keys are also accepted by PulseRoute. **Never enter a Supabase secret key or legacy service_role key**; PulseRoute rejects those obvious key types in the browser.
-
-The SQL schema enables Row Level Security and grants the public client only `SELECT` and `INSERT` access to `crowd_reports`. It also enforces one report per anonymous client tag / station / line / five-minute bucket. This is appropriate hackathon-grade abuse resistance, not production anti-fraud.
-
-### Local demo fallback
-
-If Supabase is not configured or unreachable, crowd feedback still works on the current browser using local storage and is clearly labelled:
-
-**Community demo — this browser**
-
-Those local-only reports are not shared with other devices.
-
-### How community reports affect recommendations
-
-Community crowd data stays separate from official LTA DataMall data in the UI.
-
-- **LTA DataMall — Live** means an official LTA reading successfully returned through the local Vite proxy.
-- **Community** means recent commuter reports stored in the configured shared crowd service.
-- **Community demo — this browser** means local-only fallback reports.
-
-When enough community reports exist, PulseRoute blends them with available LTA station crowd readings. If LTA crowd data is unavailable, sufficiently supported community reports can still influence **Balanced** and **Less crowded** route scoring. A route card shows the community colour, report count and confidence so the commuter can see why the recommendation changed.
-
-## LTA crowd-density refresh strategy
-
-PulseRoute deliberately treats Train Service Alerts and Station Crowd Density differently to avoid unnecessary DataMall quota pressure:
-
-- **Train Service Alerts:** refreshed every 60 seconds.
-- **Whole-network PCDRealTime crowd density:** refreshed approximately every 5 minutes.
-- The eight MRT line requests are sent **sequentially**, with a small gap between requests instead of a single parallel burst.
-- If DataMall reports a quota/rate-limit violation, PulseRoute stops the remaining crowd calls immediately and backs off for **10 minutes**, then **20 minutes**, then up to **30 minutes** for repeated quota failures.
-- Successful crowd rows are kept as the last known snapshot. A partial or rate-limited refresh updates only the lines that succeeded instead of clearing the panel.
-- The Live Updates page distinguishes **“temporarily rate-limited”** from **“LTA returned no crowd-density rows.”**
-
-Manual Live Updates refreshes still refresh Train Service Alerts, but they respect the crowd-density cadence/backoff window rather than forcing another PCDRealTime burst.
-
-## Data-source labels
-
-| Label | Meaning |
-| --- | --- |
-| **OneMap** | Successful OneMap public-transport itinerary. |
-| **LTA DataMall — Live** | Successful authenticated DataMall response in the current browser session. |
-| **PulseRoute network model** | Local MRT-only routing fallback. |
-| **Simulation** | Explicit hackathon simulation; never presented as official data. |
-
-## Credential handling
-
-This frontend-only setup is for a hackathon/demo, not production secret storage. PulseRoute:
-
-- uses `sessionStorage` only;
-- masks credential fields by default;
-- never places credentials in URLs;
-- never logs credentials;
-- never hard-codes or commits credentials;
-- provides individual Clear controls and **Clear all credentials**.
-
-## Suggested judge walkthrough
-
-1. In **Plan a Trip**, show a OneMap result with bus/walking legs if your token is working.
-2. Point out duration, walking time/distance, transfers, crowding and the deterministic recommendation explanation.
-3. Change **Balanced → Fastest → Less crowded → Fewer transfers → Less walking** and show why ordering changes.
-4. Start a route and open **My Journey**.
-5. Show the normal **Journey on track** state.
-6. Use **Load multimodal demo** for Bugis → Paya Lebar.
-7. Press **Simulate disruption**.
-8. Show the **Simulation** Bus 7 + walking relief option, the extra-time/walking/crowding trade-off, and why it avoids the EWL.
-9. If DataMall direct browser access works, point out the separate **LTA DataMall — Live** next-bus/occupancy badge.
-10. Press **Switch route**, then explain that real OneMap alternatives take precedence whenever available.
-
-## Build verification
-
-The repository's GitHub Actions workflow runs:
-
-```bash
+```powershell
 npm install
 npm run test:smoke
+npm run test:server
 npm run build
+npm run test:ui
+npm run audit:secrets
 ```
 
-The app must remain fully usable with neither credential configured.
+Smoke tests cover local fallback, multimodal legs, preferences, crowd sequential requests/backoff, community aggregation, simulations and rerouting. Backend tests cover API boundaries, real-probe status classification, credential injection/redaction, community validation and shared crowd quota behavior.
+
+After deployment, verify `/api/health`, Settings' integration checks, a OneMap trip, Live Updates, voice planning, a community report, and the My Journey simulation. Microphone permission requires HTTPS (or localhost). A successful build or liveness response alone does not prove provider connectivity.
+
+Set `TEST_BASE_URL` to the deployed HTTPS origin and run `npm run test:deployed` for live provider/browser checks. On Windows this includes an in-memory synthesized audio request for City Hall → Orchard. `npm run test:ui` uses mocked provider responses for deterministic UI regression checks and requires `npx playwright install chromium` first.
+
+`npm run audit:secrets -- --cloud` additionally compares actual Secret Manager values against the worktree, build and all reachable Git blobs without printing values. Set `GOOGLE_CLOUD_PROJECT` and, if needed, `GCLOUD_PATH`. For this deployment use `--without-community` until the two Supabase values exist. With `TEST_BASE_URL` set, the audit also downloads and checks the deployed frontend.

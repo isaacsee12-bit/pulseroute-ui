@@ -14,7 +14,7 @@ function preferredMimeType() {
   return candidates.find(type => MediaRecorder.isTypeSupported?.(type)) || '';
 }
 
-export default function VoiceTripButton({ apiKey, stationNames, onIntent, onNeedKey }) {
+export default function VoiceTripButton({ stationNames, onIntent }) {
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
@@ -38,11 +38,6 @@ export default function VoiceTripButton({ apiKey, stationNames, onIntent, onNeed
     setDetail('');
     setResult(null);
 
-    if (!String(apiKey || '').trim()) {
-      setDetail('Add a Gemini API key in Settings to use voice planning.');
-      onNeedKey?.();
-      return;
-    }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setDetail('Voice recording is not supported in this browser.');
       return;
@@ -76,7 +71,7 @@ export default function VoiceTripButton({ apiKey, stationNames, onIntent, onNeed
         setPhase('processing');
         setDetail('Gemini is identifying your start and destination…');
         try {
-          const intent = await parseVoiceTrip(blob, apiKey, stationNames);
+          const intent = await parseVoiceTrip(blob, stationNames);
           const applied = await onIntent(intent);
           setResult({ ...intent, ...applied });
           setPhase('success');

@@ -1,6 +1,6 @@
 import { STATION_BY_CODE, STATION_BY_NAME } from '../data/mrtNetwork.js';
 
-const DATAMALL_BASE = '/lta-proxy';
+const DATAMALL_BASE = '/api/lta';
 const CROWD_LINES = ['CCL', 'CEL', 'CGL', 'DTL', 'EWL', 'NEL', 'NSL', 'TEL'];
 export const CROWD_REFRESH_MS = 5 * 60 * 1000;
 export const CROWD_REQUEST_GAP_MS = 350;
@@ -27,32 +27,28 @@ function unwrap(payload) {
   return payload?.value ?? payload;
 }
 
-async function dataMallGet(path, accountKey) {
-  const key = String(accountKey || '').trim();
-  if (!key) throw new DataMallRequestError('LTA DataMall Account Key is not configured.', 'not_configured');
-
+async function dataMallGet(path) {
   let response;
   try {
     response = await fetch(`${DATAMALL_BASE}/${path}`, {
       method: 'GET',
       headers: {
-        AccountKey: key,
         Accept: 'application/json',
       },
       cache: 'no-store',
     });
   } catch {
     throw new DataMallRequestError(
-      'The local DataMall proxy could not be reached. Start PulseRoute with npm run dev (or npm run preview) and try again.',
-      'proxy_unavailable',
+      'The LTA cloud integration could not be reached. Please try again.',
+      'backend_unavailable',
     );
   }
 
   const contentType = response.headers.get('content-type') || '';
   if (response.status === 404 || (!contentType.includes('json') && response.ok)) {
     throw new DataMallRequestError(
-      'The local DataMall proxy is not active. Run PulseRoute through Vite with npm run dev (or npm run preview).',
-      'proxy_unavailable',
+      'The LTA cloud integration is unavailable.',
+      'backend_unavailable',
       response.status,
     );
   }
@@ -71,15 +67,15 @@ async function dataMallGet(path, accountKey) {
       : response.status === 401 || response.status === 403
         ? 'invalid_key'
         : response.status === 502 || response.status === 504
-          ? 'proxy_upstream_failed'
+          ? 'upstream_failed'
           : 'connection_failed';
     throw new DataMallRequestError(
       code === 'rate_limited'
         ? 'LTA DataMall temporarily rate-limited the crowd-density request. PulseRoute will back off before retrying.'
         : code === 'invalid_key'
-          ? 'LTA DataMall rejected the Account Key.'
-          : code === 'proxy_upstream_failed'
-            ? 'The local proxy is running, but it could not reach LTA DataMall.'
+          ? 'The LTA cloud integration is misconfigured.'
+          : code === 'upstream_failed'
+            ? 'The cloud service could not reach LTA DataMall.'
             : `LTA DataMall returned HTTP ${response.status}.`,
       code,
       response.status,
@@ -123,12 +119,6 @@ function normaliseAlerts(raw) {
   });
 }
 
-export async function testLtaDataMallKey(accountKey) {
-  const raw = await dataMallGet('TrainServiceAlerts', accountKey);
-  normaliseAlerts(raw);
-  return { ok: true };
-}
-
 function wait(milliseconds) {
   if (!milliseconds) return Promise.resolve();
   return new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -143,15 +133,15 @@ export function mergeCrowdSnapshots(previous = {}, incoming = {}) {
   return { ...(previous || {}), ...(incoming || {}) };
 }
 
-export async function fetchTrainServiceAlerts(accountKey) {
-  const alertsRaw = await dataMallGet('TrainServiceAlerts', accountKey);
+export async function fetchTrainServiceAlerts() {
+  const alertsRaw = await dataMallGet('TrainServiceAlerts');
   return {
     alerts: normaliseAlerts(alertsRaw),
     fetchedAt: new Date().toISOString(),
   };
 }
 
-export async function fetchCrowdDensity(accountKey, { requestGapMs = CROWD_REQUEST_GAP_MS } = {}) {
+export async function fetchCrowdDensity({ requestGapMs = CROWD_REQUEST_GAP_MS } = {}) {
   const crowd = {};
   const failures = [];
   const attemptedLines = [];
@@ -160,10 +150,10 @@ export async function fetchCrowdDensity(accountKey, { requestGapMs = CROWD_REQUE
     const line = CROWD_LINES[index];
     attemptedLines.push(line);
     try {
-      const rows = await dataMallGet(`PCDRealTime?TrainLine=${encodeURIComponent(line)}`, accountKey);
+      const rows = await dataMallGet(`PCDRealTime?TrainLine=${encodeURIComponent(line)}`);
       crowd[line] = Array.isArray(rows) ? rows : [];
     } catch (error) {
-      if (error?.code === 'invalid_key' || error?.code === 'proxy_unavailable') throw error;
+      if (error?.code === 'invalid_key' || error?.code === 'backend_unavailable') throw error;
       failures.push({
         line,
         code: error?.code || 'connection_failed',
@@ -173,7 +163,7 @@ export async function fetchCrowdDensity(accountKey, { requestGapMs = CROWD_REQUE
 
       // A quota failure applies to the account, so stop immediately instead of
       // burning the remaining line requests in the same refresh.
-      if (error?.code === 'rate_limited' || error?.code === 'proxy_upstream_failed') break;
+      if (error?.code === 'rate_limited' || error?.code === 'upstream_failed') break;
     }
 
     if (index < CROWD_LINES.length - 1) await wait(requestGapMs);
@@ -213,9 +203,9 @@ export async function fetchCrowdDensity(accountKey, { requestGapMs = CROWD_REQUE
   };
 }
 
-export async function fetchLiveRail(accountKey) {
-  const alertsResult = await fetchTrainServiceAlerts(accountKey);
-  const crowdResult = await fetchCrowdDensity(accountKey);
+export async function fetchLiveRail() {
+  const alertsResult = await fetchTrainServiceAlerts();
+  const crowdResult = await fetchCrowdDensity();
   return {
     configured: true,
     source: 'LTA DataMall — Live',
@@ -249,14 +239,14 @@ function normaliseBusArrivalBus(bus) {
   };
 }
 
-export async function fetchBusArrival(busStopCode, serviceNo, accountKey) {
+export async function fetchBusArrival(busStopCode, serviceNo) {
   const stop = String(busStopCode || '').trim();
   const service = String(serviceNo || '').trim();
   if (!/^\d{5}$/.test(stop)) throw new DataMallRequestError('A valid five-digit bus stop code is required.', 'invalid_request');
 
   const params = new URLSearchParams({ BusStopCode: stop });
   if (service) params.set('ServiceNo', service);
-  const payload = await dataMallGet(`v3/BusArrival?${params.toString()}`, accountKey);
+  const payload = await dataMallGet(`v3/BusArrival?${params.toString()}`);
   const services = Array.isArray(payload?.Services) ? payload.Services : [];
   const selected = service ? services.find(item => String(item.ServiceNo) === service) : services[0];
   if (!selected) return null;

@@ -112,7 +112,7 @@ try {
       { status: 429, headers: { 'Content-Type': 'application/json' } },
     );
   };
-  const quotaResult = await fetchCrowdDensity('test-key', { requestGapMs: 0 });
+  const quotaResult = await fetchCrowdDensity({ requestGapMs: 0 });
   assert.equal(quotaResult.status.state, 'rate_limited');
   assert.equal(quotaCalls, 1, 'Crowd refresh must stop immediately after a quota violation');
 
@@ -127,7 +127,7 @@ try {
     inFlight -= 1;
     return new Response(JSON.stringify({ value: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
-  const sequentialResult = await fetchCrowdDensity('test-key', { requestGapMs: 0 });
+  const sequentialResult = await fetchCrowdDensity({ requestGapMs: 0 });
   assert.equal(sequentialCalls, 8);
   assert.equal(maxInFlight, 1, 'PCDRealTime line calls must be sequential, not parallel');
   assert.equal(sequentialResult.status.state, 'empty');

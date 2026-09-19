@@ -1,6 +1,7 @@
 -- PulseRoute community crowd feedback
 -- Run once in the Supabase SQL Editor for the project used by PulseRoute.
--- Use a publishable key in the browser. Never use a secret/service_role key.
+-- Store the publishable key in Google Secret Manager for the Cloud Run backend.
+-- Never use a secret/service_role key; the backend preserves these RLS policies.
 
 create table if not exists public.crowd_reports (
   id uuid primary key default gen_random_uuid(),
